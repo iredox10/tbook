@@ -2,7 +2,7 @@ use crate::app::{App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -15,38 +15,50 @@ pub fn render(f: &mut Frame, app: &mut App) {
     };
 
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(2)
-        .constraints([Constraint::Min(0)].as_ref())
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
         .split(f.area());
 
     // Fill background
     f.render_widget(Block::default().style(Style::default().bg(bg)), f.area());
 
+    // List of words
     let items: Vec<ListItem> = app
-        .toc_items
+        .vocabulary
         .iter()
         .enumerate()
-        .map(|(i, t)| {
-            let style = if i == app.selected_toc_index {
+        .map(|(i, v)| {
+            let style = if i == app.selected_vocab_index {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(fg).bg(bg)
             };
-            ListItem::new(format!("{:02}. {}", i + 1, t)).style(style)
+            ListItem::new(format!("{} ({})", v.word, v.lookup_count)).style(style)
         })
         .collect();
 
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Table of Contents (Enter to Jump, Esc to Back) ")
+                .title(" Vocabulary List ")
                 .borders(Borders::ALL)
                 .style(Style::default().fg(fg).bg(bg)),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">> ");
     f.render_widget(list, chunks[0]);
+
+    // Definition display
+    if let Some(vocab) = app.vocabulary.get(app.selected_vocab_index) {
+        let def = Paragraph::new(vocab.definition.as_str())
+            .block(
+                Block::default()
+                    .title(format!(" {} ", vocab.word))
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(fg).bg(bg)),
+            )
+            .wrap(Wrap { trim: true });
+        f.render_widget(def, chunks[1]);
+    }
 }

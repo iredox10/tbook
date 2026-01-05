@@ -1,6 +1,12 @@
+pub mod annotation;
+pub mod dictionary;
 pub mod library;
 pub mod reader;
+pub mod rsvp;
 pub mod toc;
+
+pub mod globalsearch;
+pub mod vocabulary;
 
 use crate::app::{App, AppView};
 use ratatui::Frame;
@@ -8,7 +14,15 @@ use ratatui::Frame;
 pub fn render(f: &mut Frame, app: &mut App) {
     match app.view {
         AppView::Library => library::render(f, app),
-        AppView::Reader | AppView::Search => reader::render(f, app),
+        AppView::Reader | AppView::Search | AppView::Visual | AppView::Select => {
+            reader::render(f, app)
+        }
         AppView::Toc => toc::render(f, app),
+        AppView::Rsvp => rsvp::render(f, app),
+        AppView::Annotation => annotation::render_add(f, app),
+        AppView::AnnotationList => annotation::render_list(f, app),
+        AppView::Dictionary => dictionary::render(f, app),
+        AppView::Vocabulary => vocabulary::render(f, app),
+        AppView::GlobalSearch => globalsearch::render(f, app),
     }
 }

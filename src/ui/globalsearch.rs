@@ -2,7 +2,7 @@ use crate::app::{App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -17,36 +17,43 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
-        .constraints([Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(f.area());
 
     // Fill background
     f.render_widget(Block::default().style(Style::default().bg(bg)), f.area());
 
+    let input = Paragraph::new(app.global_search_query.as_str()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Global Search (Type and press Enter) ")
+            .style(Style::default().fg(fg).bg(bg)),
+    );
+    f.render_widget(input, chunks[0]);
+
     let items: Vec<ListItem> = app
-        .toc_items
+        .global_search_results
         .iter()
         .enumerate()
-        .map(|(i, t)| {
-            let style = if i == app.selected_toc_index {
+        .map(|(i, res)| {
+            let style = if i == app.selected_search_index {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(fg).bg(bg)
             };
-            ListItem::new(format!("{:02}. {}", i + 1, t)).style(style)
+            ListItem::new(format!("{} [Ch {}]: {}", res.1, res.2 + 1, res.3)).style(style)
         })
         .collect();
 
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Table of Contents (Enter to Jump, Esc to Back) ")
+                .title(" Search Results ")
                 .borders(Borders::ALL)
                 .style(Style::default().fg(fg).bg(bg)),
         )
-        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">> ");
-    f.render_widget(list, chunks[0]);
+    f.render_widget(list, chunks[1]);
 }
