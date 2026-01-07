@@ -2,8 +2,9 @@ use crate::db::{AnnotationRecord, BookRecord, Db, VocabRecord};
 use crate::parser::{BookParser, EpubParser, PdfParser};
 use anyhow::Result;
 use std::time::Instant;
+use walkdir::WalkDir;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum AppView {
     Library,
     Reader,
@@ -17,6 +18,9 @@ pub enum AppView {
     Select,
     Vocabulary,
     GlobalSearch,
+    PathInput,
+    FileExplorer,
+    Help,
 }
 
 #[derive(Clone, Copy)]
@@ -29,6 +33,7 @@ pub enum Theme {
 
 pub struct App {
     pub view: AppView,
+    pub previous_view: Option<AppView>,
     pub db: Db,
     pub books: Vec<BookRecord>,
     pub selected_book_index: usize,
@@ -60,6 +65,11 @@ pub struct App {
     pub global_search_query: String,
     pub global_search_results: Vec<(i32, String, usize, String)>,
     pub selected_search_index: usize,
+    // Explorer State
+    pub explorer_path: String,
+    pub explorer_results: Vec<std::path::PathBuf>,
+    pub selected_explorer_index: usize,
+    pub is_scanning: bool,
 }
 
 pub struct LoadedBook {
@@ -83,6 +93,7 @@ impl App {
         let books = db.get_books()?;
         Ok(Self {
             view: AppView::Library,
+            previous_view: None,
             db,
             books,
             selected_book_index: 0,
@@ -108,6 +119,10 @@ impl App {
             global_search_query: String::new(),
             global_search_results: Vec::new(),
             selected_search_index: 0,
+            explorer_path: String::new(),
+            explorer_results: Vec::new(),
+            selected_explorer_index: 0,
+            is_scanning: false,
         })
     }
 
@@ -120,8 +135,11 @@ impl App {
         if self.books.is_empty() {
             return Ok(());
         }
-        let book_record = &self.books[self.selected_book_index];
-        
+        let book_record = self.books[self.selected_book_index].clone();
+        self.load_book(book_record)
+    }
+
+    pub fn load_book(&mut self, book_record: BookRecord) -> Result<()> {
         let mut parser = if book_record.path.to_lowercase().ends_with(".pdf") {
             BookParser::Pdf(PdfParser::new(&book_record.path)?)
         } else {
@@ -195,8 +213,7 @@ impl App {
 
     pub fn save_progress(&mut self) -> Result<()> {
         if let Some(ref book) = self.current_book {
-            self.db
-                .update_progress(&book.path, book.current_chapter, book.current_line)?;
+            self.db.update_progress(&book.path, book.current_chapter, book.current_line, book.words_read)?;
         }
         Ok(())
     }
@@ -404,13 +421,7 @@ impl App {
                 } else {
                     Some(self.annotation_note.as_str())
                 };
-                self.db.add_annotation(
-                    book.id,
-                    book.current_chapter,
-                    sl, sw, el, ew,
-                    &content,
-                    note,
-                )?;
+                self.db.add_annotation(book.id, book.current_chapter, sl, sw, el, ew, &content, note)?;
                 book.chapter_annotations = self.db.get_annotations(book.id)?
                     .into_iter()
                     .filter(|a| a.chapter == book.current_chapter)
@@ -430,13 +441,7 @@ impl App {
         if let Some(ref mut book) = self.current_book {
             if let Some((sl, sw, el, ew)) = range {
                 if !content.is_empty() {
-                    self.db.add_annotation(
-                        book.id,
-                        book.current_chapter,
-                        sl, sw, el, ew,
-                        &content,
-                        None,
-                    )?;
+                    self.db.add_annotation(book.id, book.current_chapter, sl, sw, el, ew, &content, None)?;
                     book.chapter_annotations = self.db.get_annotations(book.id)?
                         .into_iter()
                         .filter(|a| a.chapter == book.current_chapter)
@@ -527,6 +532,20 @@ impl App {
         }
     }
 
+    pub fn scan_for_books_sync(path: String) -> Vec<std::path::PathBuf> {
+        let mut results = Vec::new();
+        for entry in WalkDir::new(path).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+            let f_path = entry.path();
+            if f_path.is_file() {
+                let ext = f_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                if ext == "epub" || ext == "pdf" {
+                    results.push(f_path.to_path_buf());
+                }
+            }
+        }
+        results
+    }
+
     pub fn global_search(&self, query: &str) -> Result<Vec<(i32, String, usize, String)>> {
         let mut results = Vec::new();
         let books = self.db.get_books()?;
@@ -536,7 +555,6 @@ impl App {
             } else {
                 BookParser::Epub(EpubParser::new(&book.path)?)
             };
-            
             let count = parser.get_chapter_count();
             for i in 0..count {
                 if let Ok(content) = parser.get_chapter_content(i) {

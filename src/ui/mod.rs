@@ -1,11 +1,13 @@
 pub mod annotation;
 pub mod dictionary;
+pub mod explorer;
+pub mod globalsearch;
+pub mod help;
 pub mod library;
+pub mod path_input;
 pub mod reader;
 pub mod rsvp;
 pub mod toc;
-
-pub mod globalsearch;
 pub mod vocabulary;
 
 use crate::app::{App, AppView};
@@ -24,5 +26,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
         AppView::Dictionary => dictionary::render(f, app),
         AppView::Vocabulary => vocabulary::render(f, app),
         AppView::GlobalSearch => globalsearch::render(f, app),
+        AppView::PathInput => path_input::render(f, app),
+        AppView::FileExplorer => explorer::render(f, app),
+        AppView::Help => {
+            help::render(f, app);
+        }
+    }
+
+    if app.view == AppView::Help {
+        help::render(f, app);
     }
 }

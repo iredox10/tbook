@@ -39,4 +39,15 @@ impl BookParser {
             BookParser::Pdf(p) => p.get_toc(),
         }
     }
+
+    pub fn get_total_lines(&mut self) -> usize {
+        let mut total = 0;
+        let count = self.get_chapter_count();
+        for i in 0..count {
+            if let Ok(content) = self.get_chapter_content(i) {
+                total += content.lines().count();
+            }
+        }
+        total
+    }
 }

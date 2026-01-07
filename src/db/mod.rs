@@ -22,6 +22,8 @@ impl Db {
                 current_chapter INTEGER DEFAULT 0,
                 current_line INTEGER DEFAULT 0,
                 total_chapters INTEGER DEFAULT 0,
+                total_lines INTEGER DEFAULT 0,
+                lines_read INTEGER DEFAULT 0,
                 last_read TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
             [],
@@ -57,26 +59,34 @@ impl Db {
         Ok(())
     }
 
-    pub fn add_book(&self, title: &str, author: &str, path: &str) -> Result<()> {
+    pub fn add_book(
+        &self,
+        title: &str,
+        author: &str,
+        path: &str,
+        total_chapters: usize,
+        total_lines: usize,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO books (title, author, path) VALUES (?1, ?2, ?3)",
-            params![title, author, path],
+            "INSERT OR IGNORE INTO books (title, author, path, total_chapters, total_lines) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![title, author, path, total_chapters as i32, total_lines as i32],
         )?;
         Ok(())
     }
 
     pub fn get_books(&self) -> Result<Vec<BookRecord>> {
-        let mut stmt = self.conn.prepare("SELECT id, title, author, path, current_chapter, current_line FROM books ORDER BY last_read DESC")?;
+        let mut stmt = self.conn.prepare("SELECT id, title, author, path, current_chapter, current_line, total_chapters, total_lines, lines_read FROM books ORDER BY last_read DESC")?;
         let book_iter = stmt.query_map([], |row| {
-            let current_chapter: i32 = row.get(4)?;
-            let current_line: i32 = row.get(5)?;
             Ok(BookRecord {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 author: row.get(2)?,
                 path: row.get(3)?,
-                current_chapter: current_chapter as usize,
-                current_line: current_line as usize,
+                current_chapter: row.get::<_, i32>(4)? as usize,
+                current_line: row.get::<_, i32>(5)? as usize,
+                total_chapters: row.get::<_, i32>(6)? as usize,
+                total_lines: row.get::<_, i32>(7)? as usize,
+                lines_read: row.get::<_, i32>(8)? as usize,
             })
         })?;
 
@@ -87,10 +97,21 @@ impl Db {
         Ok(books)
     }
 
-    pub fn update_progress(&self, path: &str, chapter: usize, line: usize) -> Result<()> {
+    pub fn get_last_read_book(&self) -> Result<Option<BookRecord>> {
+        let books = self.get_books()?;
+        Ok(books.into_iter().next())
+    }
+
+    pub fn update_progress(
+        &self,
+        path: &str,
+        chapter: usize,
+        line: usize,
+        lines_read: usize,
+    ) -> Result<()> {
         self.conn.execute(
-            "UPDATE books SET current_chapter = ?1, current_line = ?2, last_read = CURRENT_TIMESTAMP WHERE path = ?3",
-            params![chapter as i32, line as i32, path],
+            "UPDATE books SET current_chapter = ?1, current_line = ?2, lines_read = ?3, last_read = CURRENT_TIMESTAMP WHERE path = ?4",
+            params![chapter as i32, line as i32, lines_read as i32, path],
         )?;
         Ok(())
     }
@@ -125,18 +146,13 @@ impl Db {
     pub fn get_annotations(&self, book_id: i32) -> Result<Vec<AnnotationRecord>> {
         let mut stmt = self.conn.prepare("SELECT id, chapter, start_line, start_word, end_line, end_word, content, note FROM annotations WHERE book_id = ?1 ORDER BY chapter, start_line, start_word")?;
         let anno_iter = stmt.query_map(params![book_id], |row| {
-            let chapter: i32 = row.get(1)?;
-            let start_line: i32 = row.get(2)?;
-            let start_word: i32 = row.get(3)?;
-            let end_line: i32 = row.get(4)?;
-            let end_word: i32 = row.get(5)?;
             Ok(AnnotationRecord {
                 id: row.get(0)?,
-                chapter: chapter as usize,
-                start_line: start_line as usize,
-                start_word: start_word as usize,
-                end_line: end_line as usize,
-                end_word: end_word as usize,
+                chapter: row.get::<_, i32>(1)? as usize,
+                start_line: row.get::<_, i32>(2)? as usize,
+                start_word: row.get::<_, i32>(3)? as usize,
+                end_line: row.get::<_, i32>(4)? as usize,
+                end_word: row.get::<_, i32>(5)? as usize,
                 content: row.get(6)?,
                 note: row.get(7)?,
             })
@@ -180,6 +196,7 @@ impl Db {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct BookRecord {
     pub id: i32,
     pub title: String,
@@ -187,6 +204,9 @@ pub struct BookRecord {
     pub path: String,
     pub current_chapter: usize,
     pub current_line: usize,
+    pub total_chapters: usize,
+    pub total_lines: usize,
+    pub lines_read: usize,
 }
 
 #[derive(Clone, Debug)]
