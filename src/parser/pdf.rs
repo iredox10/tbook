@@ -1,38 +1,28 @@
 use anyhow::{Context, Result};
+use pdf::file::FileOptions;
 use std::path::Path;
+use std::process::Command;
 
 pub struct PdfParser {
     path: String,
-    pages: Vec<String>,
+    page_count: usize,
 }
 
 impl PdfParser {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
 
-        // Use lopdf directly to get page count and extract text per page for better navigation
-        let doc = lopdf::Document::load(&path).context("Failed to load PDF document")?;
-        let page_numbers = doc.get_pages();
-        let mut pages = Vec::new();
+        // Use pdf crate to open the file lazily and get page count
+        // This avoids loading the whole document into memory
+        let file = FileOptions::cached()
+            .open(&path_str)
+            .context("Failed to open PDF document")?;
 
-        for (page_num, _) in page_numbers {
-            if let Ok(text) = doc.extract_text(&[page_num]) {
-                if !text.trim().is_empty() {
-                    pages.push(text);
-                }
-            }
-        }
-
-        if pages.is_empty() {
-            // Fallback to extract all if per-page failed or returned empty
-            let content =
-                pdf_extract::extract_text(&path).context("Failed to extract text from PDF")?;
-            pages.push(content);
-        }
+        let page_count = file.num_pages() as usize;
 
         Ok(Self {
             path: path_str,
-            pages,
+            page_count,
         })
     }
 
@@ -46,18 +36,43 @@ impl PdfParser {
     }
 
     pub fn get_chapter_count(&self) -> usize {
-        self.pages.len()
+        self.page_count
     }
 
     pub fn get_chapter_content(&mut self, index: usize) -> Result<String> {
-        self.pages
-            .get(index)
-            .cloned()
-            .context("Page index out of bounds")
+        // Use pdftotext CLI for robust and fast text extraction of a single page
+        // Pages are 1-based in pdftotext
+        let page_num = index + 1;
+
+        let output = Command::new("pdftotext")
+            .args(&[
+                "-f",
+                &page_num.to_string(),
+                "-l",
+                &page_num.to_string(),
+                "-layout", // Preserve layout
+                &self.path,
+                "-", // Output to stdout
+            ])
+            .output()
+            .context("Failed to execute pdftotext. Ensure poppler-utils is installed.")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("pdftotext failed: {}", stderr));
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+
+        if text.trim().is_empty() {
+            Ok(" [ Blank Page or Text Not Extractable ] ".to_string())
+        } else {
+            Ok(text)
+        }
     }
 
     pub fn get_toc(&self) -> Vec<String> {
-        (0..self.pages.len())
+        (0..self.page_count)
             .map(|i| format!("Page {}", i + 1))
             .collect()
     }

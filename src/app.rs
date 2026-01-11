@@ -77,10 +77,10 @@ pub struct LoadedBook {
     pub parser: BookParser,
     pub path: String,
     pub current_chapter: usize,
-    pub current_line: usize,          // Cursor line
-    pub viewport_top: usize,          // Viewport top line
-    pub chapter_content: Vec<String>, // Lines of current chapter
-    pub word_index: usize,            // Cursor word index
+    pub current_line: usize,                      // Cursor line
+    pub viewport_top: usize,                      // Viewport top line
+    pub chapter_content: Vec<String>,             // Lines of current chapter
+    pub word_index: usize,                        // Cursor word index
     pub selection_anchor: Option<(usize, usize)>, // (line, word)
     pub chapter_annotations: Vec<AnnotationRecord>,
     pub start_time: Instant,
@@ -148,7 +148,9 @@ impl App {
 
         let content = parser.get_chapter_content(book_record.current_chapter)?;
         let chapter_content: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        let chapter_annotations = self.db.get_annotations(book_record.id)?
+        let chapter_annotations = self
+            .db
+            .get_annotations(book_record.id)?
             .into_iter()
             .filter(|a| a.chapter == book_record.current_chapter)
             .collect();
@@ -181,7 +183,9 @@ impl App {
                 book.selection_anchor = None;
                 let content = book.parser.get_chapter_content(book.current_chapter)?;
                 book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                book.chapter_annotations = self.db.get_annotations(book.id)?
+                book.chapter_annotations = self
+                    .db
+                    .get_annotations(book.id)?
                     .into_iter()
                     .filter(|a| a.chapter == book.current_chapter)
                     .collect();
@@ -201,7 +205,9 @@ impl App {
                 book.selection_anchor = None;
                 let content = book.parser.get_chapter_content(book.current_chapter)?;
                 book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                book.chapter_annotations = self.db.get_annotations(book.id)?
+                book.chapter_annotations = self
+                    .db
+                    .get_annotations(book.id)?
                     .into_iter()
                     .filter(|a| a.chapter == book.current_chapter)
                     .collect();
@@ -213,7 +219,12 @@ impl App {
 
     pub fn save_progress(&mut self) -> Result<()> {
         if let Some(ref book) = self.current_book {
-            self.db.update_progress(&book.path, book.current_chapter, book.current_line, book.words_read)?;
+            self.db.update_progress(
+                &book.path,
+                book.current_chapter,
+                book.current_line,
+                book.words_read,
+            )?;
         }
         Ok(())
     }
@@ -328,7 +339,9 @@ impl App {
     pub fn get_selection_range(&self) -> Option<(usize, usize, usize, usize)> {
         if let Some(ref book) = self.current_book {
             if let Some((anchor_line, anchor_word)) = book.selection_anchor {
-                if anchor_line < book.current_line || (anchor_line == book.current_line && anchor_word <= book.word_index) {
+                if anchor_line < book.current_line
+                    || (anchor_line == book.current_line && anchor_word <= book.word_index)
+                {
                     return Some((anchor_line, anchor_word, book.current_line, book.word_index));
                 } else {
                     return Some((book.current_line, book.word_index, anchor_line, anchor_word));
@@ -346,8 +359,12 @@ impl App {
                     if let Some(line) = book.chapter_content.get(li) {
                         let words: Vec<&str> = line.split_whitespace().collect();
                         let w_start = if li == sl { sw } else { 0 };
-                        let w_end = if li == el { std::cmp::min(ew, words.len().saturating_sub(1)) } else { words.len().saturating_sub(1) };
-                        
+                        let w_end = if li == el {
+                            std::cmp::min(ew, words.len().saturating_sub(1))
+                        } else {
+                            words.len().saturating_sub(1)
+                        };
+
                         for wi in w_start..=w_end {
                             if let Some(w) = words.get(wi) {
                                 selected_words.push(*w);
@@ -378,7 +395,9 @@ impl App {
             book.selection_anchor = None;
             let content = book.parser.get_chapter_content(book.current_chapter)?;
             book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-            book.chapter_annotations = self.db.get_annotations(book.id)?
+            book.chapter_annotations = self
+                .db
+                .get_annotations(book.id)?
                 .into_iter()
                 .filter(|a| a.chapter == book.current_chapter)
                 .collect();
@@ -402,7 +421,10 @@ impl App {
         let content = if range.is_some() {
             self.get_selected_text()
         } else if let Some(ref book) = self.current_book {
-            book.chapter_content.get(book.current_line).cloned().unwrap_or_default()
+            book.chapter_content
+                .get(book.current_line)
+                .cloned()
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -412,7 +434,10 @@ impl App {
                 book.current_line,
                 0,
                 book.current_line,
-                book.chapter_content[book.current_line].split_whitespace().count().saturating_sub(1)
+                book.chapter_content[book.current_line]
+                    .split_whitespace()
+                    .count()
+                    .saturating_sub(1),
             ));
 
             if !content.is_empty() {
@@ -421,8 +446,19 @@ impl App {
                 } else {
                     Some(self.annotation_note.as_str())
                 };
-                self.db.add_annotation(book.id, book.current_chapter, sl, sw, el, ew, &content, note)?;
-                book.chapter_annotations = self.db.get_annotations(book.id)?
+                self.db.add_annotation(
+                    book.id,
+                    book.current_chapter,
+                    sl,
+                    sw,
+                    el,
+                    ew,
+                    &content,
+                    note,
+                )?;
+                book.chapter_annotations = self
+                    .db
+                    .get_annotations(book.id)?
                     .into_iter()
                     .filter(|a| a.chapter == book.current_chapter)
                     .collect();
@@ -441,8 +477,19 @@ impl App {
         if let Some(ref mut book) = self.current_book {
             if let Some((sl, sw, el, ew)) = range {
                 if !content.is_empty() {
-                    self.db.add_annotation(book.id, book.current_chapter, sl, sw, el, ew, &content, None)?;
-                    book.chapter_annotations = self.db.get_annotations(book.id)?
+                    self.db.add_annotation(
+                        book.id,
+                        book.current_chapter,
+                        sl,
+                        sw,
+                        el,
+                        ew,
+                        &content,
+                        None,
+                    )?;
+                    book.chapter_annotations = self
+                        .db
+                        .get_annotations(book.id)?
                         .into_iter()
                         .filter(|a| a.chapter == book.current_chapter)
                         .collect();
@@ -469,7 +516,9 @@ impl App {
                     book.current_chapter = anno.chapter;
                     let content = book.parser.get_chapter_content(book.current_chapter)?;
                     book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                    book.chapter_annotations = self.db.get_annotations(book.id)?
+                    book.chapter_annotations = self
+                        .db
+                        .get_annotations(book.id)?
                         .into_iter()
                         .filter(|a| a.chapter == book.current_chapter)
                         .collect();
@@ -525,7 +574,11 @@ impl App {
     pub fn get_reading_stats(&self) -> (usize, f64) {
         if let Some(ref book) = self.current_book {
             let elapsed = book.start_time.elapsed().as_secs_f64() / 60.0;
-            let wpm = if elapsed > 0.01 { (book.words_read as f64) / elapsed } else { 0.0 };
+            let wpm = if elapsed > 0.01 {
+                (book.words_read as f64) / elapsed
+            } else {
+                0.0
+            };
             (book.words_read, wpm)
         } else {
             (0, 0.0)
@@ -534,10 +587,18 @@ impl App {
 
     pub fn scan_for_books_sync(path: String) -> Vec<std::path::PathBuf> {
         let mut results = Vec::new();
-        for entry in WalkDir::new(path).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(path)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let f_path = entry.path();
             if f_path.is_file() {
-                let ext = f_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                let ext = f_path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if ext == "epub" || ext == "pdf" {
                     results.push(f_path.to_path_buf());
                 }
@@ -561,7 +622,9 @@ impl App {
                     for line in content.lines() {
                         if line.to_lowercase().contains(&query.to_lowercase()) {
                             results.push((book.id, book.title.clone(), i, line.trim().to_string()));
-                            if results.len() > 50 { return Ok(results); }
+                            if results.len() > 50 {
+                                return Ok(results);
+                            }
                         }
                     }
                 }
@@ -583,14 +646,22 @@ impl App {
                                 if let Some(w) = entry.get("word").and_then(|v| v.as_str()) {
                                     result.push_str(&format!("# {}\n", w.to_uppercase()));
                                 }
-                                if let Some(meanings) = entry.get("meanings").and_then(|v| v.as_array()) {
+                                if let Some(meanings) =
+                                    entry.get("meanings").and_then(|v| v.as_array())
+                                {
                                     for meaning in meanings {
-                                        if let Some(pos) = meaning.get("partOfSpeech").and_then(|v| v.as_str()) {
+                                        if let Some(pos) =
+                                            meaning.get("partOfSpeech").and_then(|v| v.as_str())
+                                        {
                                             result.push_str(&format!("\n[{}]\n", pos));
                                         }
-                                        if let Some(definitions) = meaning.get("definitions").and_then(|v| v.as_array()) {
+                                        if let Some(definitions) =
+                                            meaning.get("definitions").and_then(|v| v.as_array())
+                                        {
                                             for (i, def) in definitions.iter().enumerate() {
-                                                if let Some(d) = def.get("definition").and_then(|v| v.as_str()) {
+                                                if let Some(d) =
+                                                    def.get("definition").and_then(|v| v.as_str())
+                                                {
                                                     result.push_str(&format!("{}. {}\n", i + 1, d));
                                                 }
                                             }
@@ -600,9 +671,17 @@ impl App {
                                 result.push_str("\n---\n");
                             }
                         }
-                        if result.is_empty() { "No definition found.".to_string() } else { result }
-                    } else { "Failed to parse.".to_string() }
-                } else { "Error reading response.".to_string() }
+                        if result.is_empty() {
+                            "No definition found.".to_string()
+                        } else {
+                            result
+                        }
+                    } else {
+                        "Failed to parse.".to_string()
+                    }
+                } else {
+                    "Error reading response.".to_string()
+                }
             }
             Err(e) => format!("Network Error: {}.", e),
         }

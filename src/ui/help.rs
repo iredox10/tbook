@@ -1,9 +1,9 @@
 use crate::app::App;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 pub fn render(f: &mut Frame, _app: &App) {
