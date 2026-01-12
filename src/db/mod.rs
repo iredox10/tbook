@@ -211,6 +211,7 @@ pub struct BookRecord {
 
 #[derive(Clone, Debug)]
 pub struct AnnotationRecord {
+    #[allow(dead_code)]
     pub id: i32,
     pub chapter: usize,
     pub start_line: usize,

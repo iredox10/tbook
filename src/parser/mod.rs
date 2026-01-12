@@ -5,6 +5,14 @@ pub use self::epub::EpubParser;
 pub use self::pdf::PdfParser;
 
 use anyhow::Result;
+use image::DynamicImage;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub enum PageContent {
+    Text(String),
+    Image(Arc<DynamicImage>),
+}
 
 pub enum BookParser {
     Epub(EpubParser),
@@ -26,7 +34,7 @@ impl BookParser {
         }
     }
 
-    pub fn get_chapter_content(&mut self, index: usize) -> Result<String> {
+    pub fn get_chapter_content(&mut self, index: usize) -> Result<Vec<PageContent>> {
         match self {
             BookParser::Epub(p) => p.get_chapter_content(index),
             BookParser::Pdf(p) => p.get_chapter_content(index),
@@ -40,14 +48,5 @@ impl BookParser {
         }
     }
 
-    pub fn get_total_lines(&mut self) -> usize {
-        let mut total = 0;
-        let count = self.get_chapter_count();
-        for i in 0..count {
-            if let Ok(content) = self.get_chapter_content(i) {
-                total += content.lines().count();
-            }
-        }
-        total
-    }
+    // Removed get_total_lines as it was unused and caused overhead
 }

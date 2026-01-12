@@ -39,7 +39,7 @@ impl PdfParser {
         self.page_count
     }
 
-    pub fn get_chapter_content(&mut self, index: usize) -> Result<String> {
+    pub fn get_chapter_content(&mut self, index: usize) -> Result<Vec<crate::parser::PageContent>> {
         // Use pdftotext CLI for robust and fast text extraction of a single page
         // Pages are 1-based in pdftotext
         let page_num = index + 1;
@@ -65,9 +65,11 @@ impl PdfParser {
         let text = String::from_utf8_lossy(&output.stdout).to_string();
 
         if text.trim().is_empty() {
-            Ok(" [ Blank Page or Text Not Extractable ] ".to_string())
+            Ok(vec![crate::parser::PageContent::Text(
+                " [ Blank Page or Text Not Extractable ] ".to_string(),
+            )])
         } else {
-            Ok(text)
+            Ok(vec![crate::parser::PageContent::Text(text)])
         }
     }
 

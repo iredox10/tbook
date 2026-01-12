@@ -2,7 +2,7 @@ use crate::app::App;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
@@ -20,6 +20,7 @@ pub fn render(f: &mut Frame, _app: &App) {
         "S : Global Search",
         "--- READER ---",
         "j/k : Scroll View",
+        "+/- : Adjust Text Size (Zoom)",
         "s : Enter Select Mode",
         "t : Table of Contents",
         "A : View All Notes",

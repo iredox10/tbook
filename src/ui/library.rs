@@ -3,8 +3,9 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
 };
+use ratatui_image::StatefulImage;
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let (bg, fg) = match app.theme {
@@ -46,7 +47,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Split center area for list and a potential preview or info
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(chunks[1]);
 
     let items: Vec<ListItem> = app
@@ -83,17 +84,36 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .highlight_symbol(">> ");
     f.render_widget(list, main_chunks[0]);
 
-    // Book Info & Progress Bar
+    // Book Info & Cover Preview
     if let Some(selected_book) = app.books.get(app.selected_book_index) {
         let info_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(10),
-                Constraint::Length(3),
-                Constraint::Min(0),
+                Constraint::Min(0),    // Cover area
+                Constraint::Length(8), // Text info area
+                Constraint::Length(3), // Progress bar
             ])
             .split(main_chunks[1]);
 
+        // 1. Render Cover
+        let cover_block = Block::default()
+            .title(" Preview ")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(fg).bg(bg));
+        let cover_inner = cover_block.inner(info_chunks[0]);
+        f.render_widget(cover_block, info_chunks[0]);
+
+        if let Some(ref mut protocol) = app.current_library_cover {
+            let widget = StatefulImage::new(None);
+            f.render_stateful_widget(widget, cover_inner, protocol);
+        } else {
+            let no_cover = Paragraph::new("\n\n\n[ No Cover Preview ]")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(no_cover, cover_inner);
+        }
+
+        // 2. Render Text Info
         let info = format!(
             "Title: {}\nAuthor: {}\nPath: {}\nChapters: {}\nTotal Lines: {}",
             selected_book.title,
@@ -109,9 +129,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
                     .borders(Borders::ALL)
                     .style(Style::default().fg(fg).bg(bg)),
             )
-            .style(Style::default().fg(fg).bg(bg));
-        f.render_widget(info_p, info_chunks[0]);
+            .style(Style::default().fg(fg).bg(bg))
+            .wrap(Wrap { trim: true });
+        f.render_widget(info_p, info_chunks[1]);
 
+        // 3. Render Progress Gauge
         let progress = if selected_book.total_lines > 0 {
             selected_book.lines_read as f64 / selected_book.total_lines as f64
         } else {
@@ -121,7 +143,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .block(Block::default().title(" Progress ").borders(Borders::ALL))
             .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray))
             .ratio(progress);
-        f.render_widget(gauge, info_chunks[1]);
+        f.render_widget(gauge, info_chunks[2]);
     }
 
     let help = Paragraph::new(" [Enter] Open | [n] Add New | [S] Search | [?] Help | [q] Quit ")

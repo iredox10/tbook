@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
 }
 
 fn add_book_to_db(app: &mut App, path: &str) -> Result<()> {
-    let mut parser = if path.to_lowercase().ends_with(".pdf") {
+    let parser = if path.to_lowercase().ends_with(".pdf") {
         parser::BookParser::Pdf(parser::PdfParser::new(path)?)
     } else {
         parser::BookParser::Epub(parser::EpubParser::new(path)?)
@@ -108,7 +108,30 @@ async fn run_app<B: ratatui::backend::Backend>(
         }
 
         if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
+            let ev = event::read()?;
+            if let Event::Mouse(mouse) = ev {
+                if mouse.kind == event::MouseEventKind::Down(event::MouseButton::Left) {
+                    if app.view == AppView::Reader {
+                        let total_width = term_size.width;
+                        if mouse.row == 0 {
+                            // [ - ] area: x in [total_width - 14, total_width - 10]
+                            if mouse.column >= total_width.saturating_sub(14)
+                                && mouse.column <= total_width.saturating_sub(10)
+                            {
+                                app.adjust_margin(1); // Increase margin = decrease text width
+                            }
+                            // [ + ] area: x in [total_width - 7, total_width - 3]
+                            if mouse.column >= total_width.saturating_sub(7)
+                                && mouse.column <= total_width.saturating_sub(3)
+                            {
+                                app.adjust_margin(-1); // Decrease margin = increase text width
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Event::Key(key) = ev {
                 if key.code == KeyCode::Char('?') {
                     if app.view == AppView::Help {
                         app.view = app.previous_view.take().unwrap_or(AppView::Library);
@@ -143,6 +166,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                             if !app.books.is_empty() {
                                 app.selected_book_index =
                                     (app.selected_book_index + 1) % app.books.len();
+                                app.load_selected_book_preview().ok();
                             }
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
@@ -152,6 +176,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 } else {
                                     app.selected_book_index = app.books.len() - 1;
                                 }
+                                app.load_selected_book_preview().ok();
                             }
                         }
                         KeyCode::Enter => {
@@ -223,14 +248,18 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 if let Some(idx) = app.books.iter().position(|b| b.id == book_id) {
                                     app.selected_book_index = idx;
                                     let _ = app.open_selected_book();
+
                                     if let Some(ref mut book) = app.current_book {
                                         book.current_chapter = chapter;
                                         let content = book
                                             .parser
                                             .get_chapter_content(chapter)
                                             .unwrap_or_default();
-                                        book.chapter_content =
-                                            content.lines().map(|s| s.to_string()).collect();
+
+                                        let (chapter_content, image_protocols) =
+                                            App::flatten_content(&mut app.image_picker, content);
+                                        book.chapter_content = chapter_content;
+                                        book.image_protocols = image_protocols;
                                     }
                                 }
                             } else {
@@ -273,8 +302,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                             let _ = app.prev_chapter();
                         }
                         KeyCode::Char('c') => app.toggle_theme(),
-                        KeyCode::Char('[') => app.adjust_margin(-1),
-                        KeyCode::Char(']') => app.adjust_margin(1),
+                        KeyCode::Char('[') | KeyCode::Char('-') => app.adjust_margin(1),
+                        KeyCode::Char(']') | KeyCode::Char('+') | KeyCode::Char('=') => {
+                            app.adjust_margin(-1)
+                        }
                         KeyCode::Char('{') => app.adjust_spacing(1),
                         KeyCode::Char('}') => app.adjust_spacing(-1),
                         KeyCode::Char('/') => {
@@ -302,7 +333,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                         }
                         KeyCode::Char('d') => {
                             if let Some(ref book) = app.current_book {
-                                if let Some(line) = book.chapter_content.get(book.current_line) {
+                                if let Some(app::RenderLine::Text(line)) =
+                                    book.chapter_content.get(book.current_line)
+                                {
                                     if let Some(word) = line.split_whitespace().nth(book.word_index)
                                     {
                                         let clean_word: String =
@@ -420,7 +453,13 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     .chapter_content
                                     .iter()
                                     .skip(book.current_line + 1)
-                                    .position(|l| l.contains(&app.search_query))
+                                    .position(|l| {
+                                        if let app::RenderLine::Text(text) = l {
+                                            text.contains(&app.search_query)
+                                        } else {
+                                            false
+                                        }
+                                    })
                                 {
                                     for _ in 0..(pos + 1) {
                                         app.move_cursor_down(viewport_height);

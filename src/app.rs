@@ -1,8 +1,20 @@
 use crate::db::{AnnotationRecord, BookRecord, Db, VocabRecord};
-use crate::parser::{BookParser, EpubParser, PdfParser};
+use crate::parser::{BookParser, EpubParser, PageContent, PdfParser};
 use anyhow::Result;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::time::Instant;
 use walkdir::WalkDir;
+
+#[derive(Clone)]
+pub enum RenderLine {
+    Text(String),
+    Image {
+        protocol_idx: usize,
+        row_idx: usize,
+        orig_width: u32,
+        orig_height: u32,
+    },
+}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum AppView {
@@ -10,6 +22,7 @@ pub enum AppView {
     Reader,
     Search,
     Toc,
+    #[allow(dead_code)]
     Rsvp,
     Annotation,
     AnnotationList,
@@ -70,6 +83,8 @@ pub struct App {
     pub explorer_results: Vec<std::path::PathBuf>,
     pub selected_explorer_index: usize,
     pub is_scanning: bool,
+    pub image_picker: Picker,
+    pub current_library_cover: Option<Box<dyn StatefulProtocol>>,
 }
 
 pub struct LoadedBook {
@@ -77,9 +92,10 @@ pub struct LoadedBook {
     pub parser: BookParser,
     pub path: String,
     pub current_chapter: usize,
-    pub current_line: usize,                      // Cursor line
-    pub viewport_top: usize,                      // Viewport top line
-    pub chapter_content: Vec<String>,             // Lines of current chapter
+    pub current_line: usize,              // Cursor line
+    pub viewport_top: usize,              // Viewport top line
+    pub chapter_content: Vec<RenderLine>, // Lines of current chapter
+    pub image_protocols: Vec<Box<dyn StatefulProtocol>>,
     pub word_index: usize,                        // Cursor word index
     pub selection_anchor: Option<(usize, usize)>, // (line, word)
     pub chapter_annotations: Vec<AnnotationRecord>,
@@ -123,11 +139,32 @@ impl App {
             explorer_results: Vec::new(),
             selected_explorer_index: 0,
             is_scanning: false,
+            image_picker: Picker::from_termios().unwrap_or_else(|_| Picker::new((8, 16))),
+            current_library_cover: None,
         })
     }
 
     pub fn refresh_library(&mut self) -> Result<()> {
         self.books = self.db.get_books()?;
+        self.load_selected_book_preview().ok();
+        Ok(())
+    }
+
+    pub fn load_selected_book_preview(&mut self) -> Result<()> {
+        self.current_library_cover = None;
+        if self.books.is_empty() {
+            return Ok(());
+        }
+        let book_record = &self.books[self.selected_book_index];
+        if !book_record.path.to_lowercase().ends_with(".epub") {
+            return Ok(());
+        }
+
+        let mut epub = EpubParser::new(&book_record.path)?;
+        if let Some(cover) = epub.get_cover() {
+            let protocol = self.image_picker.new_resize_protocol(cover);
+            self.current_library_cover = Some(protocol);
+        }
         Ok(())
     }
 
@@ -147,7 +184,9 @@ impl App {
         };
 
         let content = parser.get_chapter_content(book_record.current_chapter)?;
-        let chapter_content: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let (chapter_content, image_protocols) =
+            Self::flatten_content(&mut self.image_picker, content);
+
         let chapter_annotations = self
             .db
             .get_annotations(book_record.id)?
@@ -163,56 +202,164 @@ impl App {
             current_line: book_record.current_line,
             viewport_top: book_record.current_line,
             chapter_content,
+            image_protocols,
             word_index: 0,
             selection_anchor: None,
             chapter_annotations,
             start_time: Instant::now(),
             words_read: 0,
         });
+        self.db
+            .update_progress(
+                &book_record.path,
+                book_record.current_chapter,
+                book_record.current_line,
+                0,
+            )
+            .ok();
         self.view = AppView::Reader;
         Ok(())
     }
 
+    pub fn flatten_content(
+        picker: &mut Picker,
+        content: Vec<PageContent>,
+    ) -> (Vec<RenderLine>, Vec<Box<dyn StatefulProtocol>>) {
+        let mut lines = Vec::new();
+        let mut protocols = Vec::new();
+        for item in content {
+            match item {
+                PageContent::Text(s) => {
+                    for line in s.lines() {
+                        lines.push(RenderLine::Text(line.to_string()));
+                    }
+                }
+                PageContent::Image(img) => {
+                    let (w, h) = (img.width(), img.height());
+
+                    // Aspect-ratio aware height calculation.
+                    // Terminal cells are roughly 1:2 height:width ratio.
+                    // We want to fit the image reasonably.
+                    // Let's assume a default width of 80 characters for the reader.
+                    let target_width_chars = 80;
+                    let aspect_ratio = h as f32 / w as f32;
+                    // height_chars = (target_width_chars * aspect_ratio) * cell_width_to_height_ratio
+                    // typically cell_width_to_height_ratio is 0.5
+                    let mut height_lines =
+                        ((target_width_chars as f32 * aspect_ratio) * 0.5) as usize;
+
+                    // Cap the height so it doesn't take over too many screens
+                    height_lines = height_lines.clamp(5, 30);
+
+                    let dynamic_image = (*img).clone();
+                    let protocol = picker.new_resize_protocol(dynamic_image);
+                    let protocol_idx = protocols.len();
+                    protocols.push(protocol);
+                    for i in 0..height_lines {
+                        lines.push(RenderLine::Image {
+                            protocol_idx,
+                            row_idx: i,
+                            orig_width: w,
+                            orig_height: h,
+                        });
+                    }
+                }
+            }
+        }
+        if lines.is_empty() {
+            lines.push(RenderLine::Text(" [ Empty ] ".to_string()));
+        }
+        (lines, protocols)
+    }
+
     pub fn next_chapter(&mut self) -> Result<()> {
-        if let Some(ref mut book) = self.current_book {
+        let (should_update, new_chapter_idx) = if let Some(ref book) = self.current_book {
             if book.current_chapter + 1 < book.parser.get_chapter_count() {
-                book.current_chapter += 1;
+                (true, book.current_chapter + 1)
+            } else {
+                (false, 0)
+            }
+        } else {
+            (false, 0)
+        };
+
+        if should_update {
+            if let Some(ref mut book) = self.current_book {
+                book.current_chapter = new_chapter_idx;
                 book.current_line = 0;
                 book.viewport_top = 0;
                 book.word_index = 0;
                 book.selection_anchor = None;
-                let content = book.parser.get_chapter_content(book.current_chapter)?;
-                book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                book.chapter_annotations = self
-                    .db
-                    .get_annotations(book.id)?
-                    .into_iter()
-                    .filter(|a| a.chapter == book.current_chapter)
-                    .collect();
-                self.save_progress()?;
             }
+
+            let content = if let Some(ref mut book) = self.current_book {
+                book.parser.get_chapter_content(new_chapter_idx)?
+            } else {
+                return Ok(());
+            };
+
+            let (flattened, protocols) = Self::flatten_content(&mut self.image_picker, content);
+
+            let book_id = self.current_book.as_ref().unwrap().id;
+            let chapter_annotations = self
+                .db
+                .get_annotations(book_id)?
+                .into_iter()
+                .filter(|a| a.chapter == new_chapter_idx)
+                .collect();
+
+            if let Some(ref mut book) = self.current_book {
+                book.chapter_content = flattened;
+                book.image_protocols = protocols;
+                book.chapter_annotations = chapter_annotations;
+            }
+            self.save_progress()?;
         }
         Ok(())
     }
 
     pub fn prev_chapter(&mut self) -> Result<()> {
-        if let Some(ref mut book) = self.current_book {
+        let (should_update, new_chapter_idx) = if let Some(ref book) = self.current_book {
             if book.current_chapter > 0 {
-                book.current_chapter -= 1;
+                (true, book.current_chapter - 1)
+            } else {
+                (false, 0)
+            }
+        } else {
+            (false, 0)
+        };
+
+        if should_update {
+            if let Some(ref mut book) = self.current_book {
+                book.current_chapter = new_chapter_idx;
                 book.current_line = 0;
                 book.viewport_top = 0;
                 book.word_index = 0;
                 book.selection_anchor = None;
-                let content = book.parser.get_chapter_content(book.current_chapter)?;
-                book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                book.chapter_annotations = self
-                    .db
-                    .get_annotations(book.id)?
-                    .into_iter()
-                    .filter(|a| a.chapter == book.current_chapter)
-                    .collect();
-                self.save_progress()?;
             }
+
+            let content = if let Some(ref mut book) = self.current_book {
+                book.parser.get_chapter_content(new_chapter_idx)?
+            } else {
+                return Ok(());
+            };
+
+            let (flattened, protocols) = Self::flatten_content(&mut self.image_picker, content);
+
+            let book_id = self.current_book.as_ref().unwrap().id;
+            let chapter_annotations = self
+                .db
+                .get_annotations(book_id)?
+                .into_iter()
+                .filter(|a| a.chapter == new_chapter_idx)
+                .collect();
+
+            if let Some(ref mut book) = self.current_book {
+                book.chapter_content = flattened;
+                book.image_protocols = protocols;
+                book.chapter_annotations = chapter_annotations;
+            }
+            self.save_progress()?;
         }
         Ok(())
     }
@@ -233,7 +380,9 @@ impl App {
         if let Some(ref mut book) = self.current_book {
             if book.viewport_top + 1 < book.chapter_content.len() {
                 book.viewport_top += 1;
-                if let Some(line) = book.chapter_content.get(book.viewport_top - 1) {
+                if let Some(RenderLine::Text(line)) =
+                    book.chapter_content.get(book.viewport_top - 1)
+                {
                     book.words_read += line.split_whitespace().count();
                 }
                 if book.current_line < book.viewport_top {
@@ -276,54 +425,86 @@ impl App {
     }
 
     fn sync_word_index(book: &mut LoadedBook) {
-        if let Some(line) = book.chapter_content.get(book.current_line) {
-            let words = line.split_whitespace().count();
-            if book.word_index >= words && words > 0 {
-                book.word_index = words.saturating_sub(1);
-            } else if words == 0 {
+        match book.chapter_content.get(book.current_line) {
+            Some(RenderLine::Text(_line)) => {
+                let words = _line.split_whitespace().count();
+                if book.word_index >= words && words > 0 {
+                    book.word_index = words.saturating_sub(1);
+                } else if words == 0 {
+                    book.word_index = 0;
+                }
+            }
+            Some(RenderLine::Image { .. }) => {
                 book.word_index = 0;
             }
+            None => {}
         }
     }
 
     pub fn cursor_right(&mut self, height: usize) {
         if let Some(ref mut book) = self.current_book {
-            if let Some(line) = book.chapter_content.get(book.current_line) {
-                let words: Vec<&str> = line.split_whitespace().collect();
-                if book.word_index + 1 < words.len() {
-                    book.word_index += 1;
-                } else if book.current_line + 1 < book.chapter_content.len() {
-                    book.current_line += 1;
-                    if book.current_line >= book.viewport_top + height.saturating_sub(2) {
-                        book.viewport_top += 1;
+            match book.chapter_content.get(book.current_line) {
+                Some(RenderLine::Text(_line)) => {
+                    let words: Vec<&str> = _line.split_whitespace().collect();
+                    if book.word_index + 1 < words.len() {
+                        book.word_index += 1;
+                    } else if book.current_line + 1 < book.chapter_content.len() {
+                        book.current_line += 1;
+                        if book.current_line >= book.viewport_top + height.saturating_sub(2) {
+                            book.viewport_top += 1;
+                        }
+                        book.word_index = 0;
                     }
-                    book.word_index = 0;
                 }
+                Some(RenderLine::Image { .. }) => {
+                    // Move to next line
+                    if book.current_line + 1 < book.chapter_content.len() {
+                        book.current_line += 1;
+                        if book.current_line >= book.viewport_top + height.saturating_sub(2) {
+                            book.viewport_top += 1;
+                        }
+                        book.word_index = 0;
+                    }
+                }
+                None => {}
             }
         }
     }
 
     pub fn cursor_left(&mut self) {
         if let Some(ref mut book) = self.current_book {
-            if book.word_index > 0 {
-                book.word_index -= 1;
-            } else if book.current_line > 0 {
-                book.current_line -= 1;
-                if book.current_line < book.viewport_top {
-                    book.viewport_top = book.current_line;
+            match book.chapter_content.get(book.current_line) {
+                Some(RenderLine::Text(_line)) => {
+                    if book.word_index > 0 {
+                        book.word_index -= 1;
+                    } else if book.current_line > 0 {
+                        book.current_line -= 1;
+                        if book.current_line < book.viewport_top {
+                            book.viewport_top = book.current_line;
+                        }
+                        Self::sync_word_index(book);
+                    }
                 }
-                if let Some(line) = book.chapter_content.get(book.current_line) {
-                    let word_count = line.split_whitespace().count();
-                    book.word_index = if word_count > 0 { word_count - 1 } else { 0 };
+                Some(RenderLine::Image { .. }) => {
+                    if book.current_line > 0 {
+                        book.current_line -= 1;
+                        if book.current_line < book.viewport_top {
+                            book.viewport_top = book.current_line;
+                        }
+                        Self::sync_word_index(book);
+                    }
                 }
+                None => {}
             }
         }
     }
 
     pub fn enter_visual_mode(&mut self) {
         if let Some(ref mut book) = self.current_book {
-            book.selection_anchor = Some((book.current_line, book.word_index));
-            self.view = AppView::Visual;
+            if let Some(RenderLine::Text(_)) = book.chapter_content.get(book.current_line) {
+                book.selection_anchor = Some((book.current_line, book.word_index));
+                self.view = AppView::Visual;
+            }
         }
     }
 
@@ -356,7 +537,7 @@ impl App {
             if let Some(ref book) = self.current_book {
                 let mut selected_words = Vec::new();
                 for li in sl..=el {
-                    if let Some(line) = book.chapter_content.get(li) {
+                    if let Some(RenderLine::Text(line)) = book.chapter_content.get(li) {
                         let words: Vec<&str> = line.split_whitespace().collect();
                         let w_start = if li == sl { sw } else { 0 };
                         let w_end = if li == el {
@@ -387,20 +568,43 @@ impl App {
     }
 
     pub fn jump_to_toc(&mut self) -> Result<()> {
-        if let Some(ref mut book) = self.current_book {
-            book.current_chapter = self.selected_toc_index;
-            book.current_line = 0;
-            book.viewport_top = 0;
-            book.word_index = 0;
-            book.selection_anchor = None;
-            let content = book.parser.get_chapter_content(book.current_chapter)?;
-            book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-            book.chapter_annotations = self
+        let (should_jump, chapter_idx) = if let Some(ref _book) = self.current_book {
+            (true, self.selected_toc_index)
+        } else {
+            (false, 0)
+        };
+
+        if should_jump {
+            if let Some(ref mut book) = self.current_book {
+                book.current_chapter = chapter_idx;
+                book.current_line = 0;
+                book.viewport_top = 0;
+                book.word_index = 0;
+                book.selection_anchor = None;
+            }
+
+            let content = if let Some(ref mut book) = self.current_book {
+                book.parser.get_chapter_content(chapter_idx)?
+            } else {
+                return Ok(());
+            };
+
+            let (flattened, protocols) = Self::flatten_content(&mut self.image_picker, content);
+
+            let book_id = self.current_book.as_ref().unwrap().id;
+            let chapter_annotations = self
                 .db
-                .get_annotations(book.id)?
+                .get_annotations(book_id)?
                 .into_iter()
-                .filter(|a| a.chapter == book.current_chapter)
+                .filter(|a| a.chapter == chapter_idx)
                 .collect();
+
+            if let Some(ref mut book) = self.current_book {
+                book.chapter_content = flattened;
+                book.image_protocols = protocols;
+                book.chapter_annotations = chapter_annotations;
+            }
+
             self.save_progress()?;
             self.view = AppView::Reader;
         }
@@ -421,47 +625,47 @@ impl App {
         let content = if range.is_some() {
             self.get_selected_text()
         } else if let Some(ref book) = self.current_book {
-            book.chapter_content
-                .get(book.current_line)
-                .cloned()
-                .unwrap_or_default()
+            if let Some(RenderLine::Text(line)) = book.chapter_content.get(book.current_line) {
+                line.clone()
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
 
         if let Some(ref mut book) = self.current_book {
-            let (sl, sw, el, ew) = range.unwrap_or((
-                book.current_line,
-                0,
-                book.current_line,
-                book.chapter_content[book.current_line]
-                    .split_whitespace()
-                    .count()
-                    .saturating_sub(1),
-            ));
+            if let Some(RenderLine::Text(line)) = book.chapter_content.get(book.current_line) {
+                let (sl, sw, el, ew) = range.unwrap_or((
+                    book.current_line,
+                    0,
+                    book.current_line,
+                    line.split_whitespace().count().saturating_sub(1),
+                ));
 
-            if !content.is_empty() {
-                let note = if self.annotation_note.trim().is_empty() {
-                    None
-                } else {
-                    Some(self.annotation_note.as_str())
-                };
-                self.db.add_annotation(
-                    book.id,
-                    book.current_chapter,
-                    sl,
-                    sw,
-                    el,
-                    ew,
-                    &content,
-                    note,
-                )?;
-                book.chapter_annotations = self
-                    .db
-                    .get_annotations(book.id)?
-                    .into_iter()
-                    .filter(|a| a.chapter == book.current_chapter)
-                    .collect();
+                if !content.is_empty() {
+                    let note = if self.annotation_note.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.annotation_note.as_str())
+                    };
+                    self.db.add_annotation(
+                        book.id,
+                        book.current_chapter,
+                        sl,
+                        sw,
+                        el,
+                        ew,
+                        &content,
+                        note,
+                    )?;
+                    book.chapter_annotations = self
+                        .db
+                        .get_annotations(book.id)?
+                        .into_iter()
+                        .filter(|a| a.chapter == book.current_chapter)
+                        .collect();
+                }
             }
         }
         self.annotation_note.clear();
@@ -510,26 +714,59 @@ impl App {
     }
 
     pub fn jump_to_annotation(&mut self) -> Result<()> {
-        if let Some(ref mut book) = self.current_book {
-            if let Some(anno) = self.current_annotations.get(self.selected_annotation_index) {
-                if book.current_chapter != anno.chapter {
-                    book.current_chapter = anno.chapter;
-                    let content = book.parser.get_chapter_content(book.current_chapter)?;
-                    book.chapter_content = content.lines().map(|s| s.to_string()).collect();
-                    book.chapter_annotations = self
-                        .db
-                        .get_annotations(book.id)?
-                        .into_iter()
-                        .filter(|a| a.chapter == book.current_chapter)
-                        .collect();
+        let (should_jump, chapter_idx, start_line, start_word) =
+            if let Some(ref mut book) = self.current_book {
+                if let Some(anno) = self.current_annotations.get(self.selected_annotation_index) {
+                    if book.current_chapter != anno.chapter {
+                        (true, anno.chapter, anno.start_line, anno.start_word)
+                    } else {
+                        // Same chapter, just move cursor
+                        book.current_line = anno.start_line;
+                        book.viewport_top = anno.start_line;
+                        book.word_index = anno.start_word;
+                        book.selection_anchor = None;
+                        (false, 0, 0, 0)
+                    }
+                } else {
+                    (false, 0, 0, 0)
                 }
-                book.current_line = anno.start_line;
-                book.viewport_top = anno.start_line;
-                book.word_index = anno.start_word;
+            } else {
+                (false, 0, 0, 0)
+            };
+
+        if should_jump {
+            if let Some(ref mut book) = self.current_book {
+                book.current_chapter = chapter_idx;
+                book.current_line = start_line;
+                book.viewport_top = start_line;
+                book.word_index = start_word;
                 book.selection_anchor = None;
-                self.save_progress()?;
-                self.view = AppView::Reader;
             }
+
+            let content = if let Some(ref mut book) = self.current_book {
+                book.parser.get_chapter_content(chapter_idx)?
+            } else {
+                return Ok(());
+            };
+
+            let (flattened, protocols) = Self::flatten_content(&mut self.image_picker, content);
+            let book_id = self.current_book.as_ref().unwrap().id;
+            let chapter_annotations = self
+                .db
+                .get_annotations(book_id)?
+                .into_iter()
+                .filter(|a| a.chapter == chapter_idx)
+                .collect();
+
+            if let Some(ref mut book) = self.current_book {
+                book.chapter_content = flattened;
+                book.image_protocols = protocols;
+                book.chapter_annotations = chapter_annotations;
+            }
+            self.save_progress()?;
+        }
+        if self.current_book.is_some() && !self.current_annotations.is_empty() {
+            self.view = AppView::Reader;
         }
         Ok(())
     }
@@ -607,9 +844,10 @@ impl App {
         results
     }
 
-    pub fn global_search(&self, query: &str) -> Result<Vec<(i32, String, usize, String)>> {
+    pub fn global_search(&mut self, query: &str) -> Result<Vec<(i32, String, usize, String)>> {
         let mut results = Vec::new();
         let books = self.db.get_books()?;
+
         for book in books {
             let mut parser = if book.path.to_lowercase().ends_with(".pdf") {
                 BookParser::Pdf(PdfParser::new(&book.path)?)
@@ -619,11 +857,20 @@ impl App {
             let count = parser.get_chapter_count();
             for i in 0..count {
                 if let Ok(content) = parser.get_chapter_content(i) {
-                    for line in content.lines() {
-                        if line.to_lowercase().contains(&query.to_lowercase()) {
-                            results.push((book.id, book.title.clone(), i, line.trim().to_string()));
-                            if results.len() > 50 {
-                                return Ok(results);
+                    let mut dummy_picker = Picker::new((8, 16));
+                    let (lines, _) = Self::flatten_content(&mut dummy_picker, content);
+                    for line_item in lines.iter() {
+                        if let RenderLine::Text(line) = line_item {
+                            if line.to_lowercase().contains(&query.to_lowercase()) {
+                                results.push((
+                                    book.id,
+                                    book.title.clone(),
+                                    i,
+                                    line.trim().to_string(),
+                                ));
+                                if results.len() > 50 {
+                                    return Ok(results);
+                                }
                             }
                         }
                     }

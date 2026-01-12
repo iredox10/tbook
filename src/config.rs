@@ -34,6 +34,7 @@ impl AppConfig {
         s.try_deserialize()
     }
 
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let toml = toml::to_string(self)?;
         std::fs::write("tbook.toml", toml)?;
