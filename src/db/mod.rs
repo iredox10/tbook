@@ -56,7 +56,43 @@ impl Db {
             )",
             [],
         )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS reading_sessions (
+                id INTEGER PRIMARY KEY,
+                book_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                words_read INTEGER DEFAULT 0,
+                UNIQUE(book_id, date),
+                FOREIGN KEY(book_id) REFERENCES books(id)
+            )",
+            [],
+        )?;
         Ok(())
+    }
+
+    pub fn log_reading_session(&self, book_id: i32, words: usize) -> Result<()> {
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        self.conn.execute(
+            "INSERT INTO reading_sessions (book_id, date, words_read) VALUES (?1, ?2, ?3)
+             ON CONFLICT(book_id, date) DO UPDATE SET words_read = words_read + ?3",
+            params![book_id, date, words as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_weekly_stats(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, SUM(words_read) FROM reading_sessions 
+             GROUP BY date ORDER BY date DESC LIMIT 7",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get::<_, i32>(1)? as usize)))?;
+        let mut stats = Vec::new();
+        for r in rows {
+            stats.push(r?);
+        }
+        stats.reverse();
+        Ok(stats)
     }
 
     pub fn add_book(

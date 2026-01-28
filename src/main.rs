@@ -107,6 +107,15 @@ async fn run_app<B: ratatui::backend::Backend>(
             app.is_scanning = false;
         }
 
+        // Auto-scroll logic
+        if app.view == AppView::Reader && app.auto_scroll_active {
+            if app.auto_scroll_last_tick.elapsed().as_millis() as u64 >= app.auto_scroll_interval_ms
+            {
+                app.scroll_viewport_down();
+                app.auto_scroll_last_tick = std::time::Instant::now();
+            }
+        }
+
         if event::poll(Duration::from_millis(10))? {
             let ev = event::read()?;
             if let Event::Mouse(mouse) = ev {
@@ -162,6 +171,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.global_search_results.clear();
                             app.view = AppView::GlobalSearch;
                         }
+                        KeyCode::Char('i') => {
+                            app.view = AppView::Stats;
+                        }
                         KeyCode::Down | KeyCode::Char('j') => {
                             if !app.books.is_empty() {
                                 app.selected_book_index =
@@ -182,6 +194,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Enter => {
                             let _ = app.open_selected_book();
                         }
+                        _ => {}
+                    },
+                    AppView::Stats => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => app.view = AppView::Library,
                         _ => {}
                     },
                     AppView::PathInput => match key.code {
@@ -311,6 +327,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('/') => {
                             app.view = AppView::Search;
                             app.search_query.clear();
+                        }
+                        KeyCode::Char('a') => {
+                            app.auto_scroll_active = !app.auto_scroll_active;
+                            app.auto_scroll_last_tick = std::time::Instant::now();
                         }
                         _ => {}
                     },

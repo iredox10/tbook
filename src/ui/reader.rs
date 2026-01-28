@@ -1,17 +1,52 @@
 use crate::app::{App, AppView, RenderLine, Theme};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
+    Frame,
 };
 use ratatui_image::StatefulImage;
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
+
+fn wrap_words_to_lines<'a>(words: &'a [&'a str], max_width: u16) -> Vec<Vec<&'a str>> {
+    let max_width = max_width as usize;
+    if max_width == 0 {
+        return vec![Vec::new()];
+    }
+
+    let mut out: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut current_w = 0usize;
+
+    for w in words {
+        let ww = UnicodeWidthStr::width(*w);
+        let add_space = if current.is_empty() { 0 } else { 1 };
+        if !current.is_empty() && current_w + add_space + ww > max_width {
+            out.push(current);
+            current = Vec::new();
+            current_w = 0;
+        }
+        if !current.is_empty() {
+            current_w += 1;
+        }
+        current.push(*w);
+        current_w += ww;
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(Vec::new());
+    }
+    out
+}
 
 pub fn render(f: &mut Frame, app: &mut App) {
     // Call these before mutably borrowing book
-    let selection = app.get_selection_range();
+    let _selection = app.get_selection_range();
     let (_, wpm) = app.get_reading_stats();
 
     if let Some(ref mut book) = app.current_book {
@@ -79,7 +114,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         ]);
         f.render_widget(Paragraph::new(buttons).style(top_bar_style), top_chunks[1]);
 
-        let viewport_height = chunks[1].height as usize;
+        let _viewport_height = chunks[1].height as usize;
         let area = Layout::default()
             .margin(app.margin)
             .constraints([Constraint::Percentage(100)])
@@ -87,120 +122,126 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         let mut rendered_protocols = HashSet::new();
 
-        // Process lines for rendering based on viewport
-        for (i, line_content) in book
-            .chapter_content
-            .iter()
-            .enumerate()
-            .skip(book.viewport_top)
-            .take(viewport_height)
-        {
-            let line_y = area.y + (i - book.viewport_top) as u16;
-            if line_y >= area.y + area.height {
-                break;
-            }
+        // When the terminal is narrow, render each paragraph as wrapped visual lines.
+        // This avoids hard-cutting long lines and keeps text responsive.
+        // We intentionally disable wrapping in Select/Visual so word indices map 1:1.
+        let wrap_text = matches!(app.view, AppView::Reader | AppView::Search | AppView::Rsvp);
 
-            let line_area = Rect {
-                x: area.x,
-                y: line_y,
-                width: area.width,
-                height: 1,
-            };
+        let mut y = area.y;
+        let mut logical_i = book.viewport_top;
+        while y < area.y.saturating_add(area.height) && logical_i < book.chapter_content.len() {
+            let line_content = &book.chapter_content[logical_i];
 
             match line_content {
                 RenderLine::Text(text) => {
-                    let mut spans = Vec::new();
-                    let words: Vec<&str> = text.split_whitespace().collect();
+                    if !wrap_text {
+                        let line_area = Rect {
+                            x: area.x,
+                            y,
+                            width: area.width,
+                            height: 1,
+                        };
 
-                    if words.is_empty() {
-                        let mut style = Style::default().fg(fg).bg(bg);
-                        if let Some((sl, _, el, _)) = selection {
-                            if i > sl && i < el {
-                                style = style.bg(Color::Rgb(60, 60, 100));
-                            }
+                        let mut spans = Vec::new();
+                        let words: Vec<&str> = text.split_whitespace().collect();
+
+                        if words.is_empty() {
+                            f.render_widget(
+                                Paragraph::new(Line::from(Span::styled(
+                                    " ",
+                                    Style::default().fg(fg).bg(bg),
+                                ))),
+                                line_area,
+                            );
+                            y = y.saturating_add(1);
+                            logical_i += 1;
+                            continue;
                         }
+
+                        for (wi, word) in words.iter().enumerate() {
+                            let mut style = Style::default().fg(fg).bg(bg);
+
+                            for anno in &book.chapter_annotations {
+                                let is_in_anno = if logical_i > anno.start_line
+                                    && logical_i < anno.end_line
+                                {
+                                    true
+                                } else if logical_i == anno.start_line && logical_i == anno.end_line
+                                {
+                                    wi >= anno.start_word && wi <= anno.end_word
+                                } else if logical_i == anno.start_line {
+                                    wi >= anno.start_word
+                                } else if logical_i == anno.end_line {
+                                    wi <= anno.end_word
+                                } else {
+                                    false
+                                };
+
+                                if is_in_anno {
+                                    style = if anno.note.is_some() {
+                                        style.bg(Color::Rgb(40, 80, 40))
+                                    } else {
+                                        style.bg(Color::Rgb(80, 60, 40))
+                                    };
+                                    break;
+                                }
+                            }
+
+                            spans.push(Span::styled(format!("{} ", word), style));
+                        }
+
                         f.render_widget(
-                            Paragraph::new(Line::from(Span::styled(" ", style))),
+                            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
                             line_area,
                         );
+                        y = y.saturating_add(1);
+                        logical_i += 1;
                         continue;
                     }
 
-                    for (wi, word) in words.iter().enumerate() {
-                        let mut style = Style::default().fg(fg).bg(bg);
-
-                        // 1. Check for persistent chapter highlights/annotations
-                        for anno in &book.chapter_annotations {
-                            let is_in_anno = if i > anno.start_line && i < anno.end_line {
-                                true
-                            } else if i == anno.start_line && i == anno.end_line {
-                                wi >= anno.start_word && wi <= anno.end_word
-                            } else if i == anno.start_line {
-                                wi >= anno.start_word
-                            } else if i == anno.end_line {
-                                wi <= anno.end_word
-                            } else {
-                                false
-                            };
-
-                            if is_in_anno {
-                                if anno.note.is_some() {
-                                    style = style.bg(Color::Rgb(40, 80, 40));
-                                } else {
-                                    style = style.bg(Color::Rgb(80, 60, 40));
-                                }
-                                break;
-                            }
+                    // Wrapped render path (Reader/Search): split into visual lines based on area.width
+                    let words: Vec<&str> = text.split_whitespace().collect();
+                    let wrapped = wrap_words_to_lines(&words, area.width);
+                    for line_words in wrapped {
+                        if y >= area.y.saturating_add(area.height) {
+                            break;
                         }
-
-                        // 2. Check for active selection highlight (Indigo)
-                        let is_selected = if let Some((sl, sw, el, ew)) = selection {
-                            if i > sl && i < el {
-                                true
-                            } else if i == sl && i == el {
-                                wi >= sw && wi <= ew
-                            } else if i == sl {
-                                wi >= sw
-                            } else if i == el {
-                                wi <= ew
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
+                        let line_area = Rect {
+                            x: area.x,
+                            y,
+                            width: area.width,
+                            height: 1,
                         };
 
-                        if is_selected {
-                            style = style.bg(Color::Rgb(60, 60, 120)).fg(Color::White);
+                        let mut spans = Vec::new();
+                        for w in line_words {
+                            spans.push(Span::styled(
+                                format!("{} ", w),
+                                Style::default().fg(fg).bg(bg),
+                            ));
                         }
 
-                        // 3. Check for cursor (Only in Select/Visual mode)
-                        if (app.view == AppView::Select || app.view == AppView::Visual)
-                            && i == book.current_line
-                            && wi == book.word_index
-                        {
-                            style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
-                            if app.view == AppView::Visual {
-                                style = style.add_modifier(Modifier::UNDERLINED);
-                            }
-                        }
-
-                        spans.push(Span::styled(format!("{} ", word), style));
+                        f.render_widget(
+                            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
+                            line_area,
+                        );
+                        y = y.saturating_add(1 + app.line_spacing);
                     }
 
-                    let p = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false });
-                    f.render_widget(p, line_area);
+                    // We intentionally don't update selection/cursor highlighting here;
+                    // Select/Visual already uses the non-wrapped path for correct indexing.
+                    logical_i += 1;
                 }
                 RenderLine::Image {
                     protocol_idx,
                     row_idx,
-                    orig_width: _,
-                    orig_height: _,
                 } => {
+                    // Images already occupy multiple logical lines in chapter_content,
+                    // so we can render them using the existing protocol logic.
+                    let line_y = y;
                     if !rendered_protocols.contains(protocol_idx) {
                         rendered_protocols.insert(*protocol_idx);
 
-                        // Find how many lines this image occupies in the content
                         let img_height_lines = book
                             .chapter_content
                             .iter()
@@ -213,7 +254,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
                             .count();
 
                         let img_start_y = line_y as i32 - (*row_idx as i32);
-
                         let full_img_area = Rect {
                             x: area.x,
                             y: img_start_y.max(area.y as i32) as u16,
@@ -226,6 +266,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
                             f.render_stateful_widget(widget, full_img_area, protocol);
                         }
                     }
+
+                    // Advance one visual row; the remaining image rows will be visited as
+                    // subsequent logical lines in the loop.
+                    y = y.saturating_add(1);
+                    logical_i += 1;
                 }
             }
         }

@@ -8,12 +8,7 @@ use walkdir::WalkDir;
 #[derive(Clone)]
 pub enum RenderLine {
     Text(String),
-    Image {
-        protocol_idx: usize,
-        row_idx: usize,
-        orig_width: u32,
-        orig_height: u32,
-    },
+    Image { protocol_idx: usize, row_idx: usize },
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -34,6 +29,7 @@ pub enum AppView {
     PathInput,
     FileExplorer,
     Help,
+    Stats,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +81,10 @@ pub struct App {
     pub is_scanning: bool,
     pub image_picker: Picker,
     pub current_library_cover: Option<Box<dyn StatefulProtocol>>,
+    // Auto-scroll State
+    pub auto_scroll_active: bool,
+    pub auto_scroll_interval_ms: u64,
+    pub auto_scroll_last_tick: Instant,
 }
 
 pub struct LoadedBook {
@@ -101,6 +101,7 @@ pub struct LoadedBook {
     pub chapter_annotations: Vec<AnnotationRecord>,
     pub start_time: Instant,
     pub words_read: usize,
+    pub session_words_logged: usize,
 }
 
 impl App {
@@ -141,6 +142,9 @@ impl App {
             is_scanning: false,
             image_picker: Picker::from_termios().unwrap_or_else(|_| Picker::new((8, 16))),
             current_library_cover: None,
+            auto_scroll_active: false,
+            auto_scroll_interval_ms: 2000, // Default scroll every 2 seconds
+            auto_scroll_last_tick: Instant::now(),
         })
     }
 
@@ -208,6 +212,7 @@ impl App {
             chapter_annotations,
             start_time: Instant::now(),
             words_read: 0,
+            session_words_logged: 0,
         });
         self.db
             .update_progress(
@@ -259,8 +264,6 @@ impl App {
                         lines.push(RenderLine::Image {
                             protocol_idx,
                             row_idx: i,
-                            orig_width: w,
-                            orig_height: h,
                         });
                     }
                 }
@@ -365,13 +368,20 @@ impl App {
     }
 
     pub fn save_progress(&mut self) -> Result<()> {
-        if let Some(ref book) = self.current_book {
+        if let Some(ref mut book) = self.current_book {
             self.db.update_progress(
                 &book.path,
                 book.current_chapter,
                 book.current_line,
                 book.words_read,
             )?;
+
+            // Log session words
+            let delta = book.words_read.saturating_sub(book.session_words_logged);
+            if delta > 0 {
+                self.db.log_reading_session(book.id, delta).ok();
+                book.session_words_logged = book.words_read;
+            }
         }
         Ok(())
     }
@@ -781,16 +791,32 @@ impl App {
     pub fn export_annotations(&self) -> Result<String> {
         if let Some(ref book) = self.current_book {
             let annos = self.db.get_annotations(book.id)?;
-            let mut output = format!("# Annotations for {}\n\n", book.path);
+            let (title, author) = book.parser.get_metadata();
+
+            let mut output = String::new();
+            // YAML Frontmatter for Obsidian/Logseq
+            output.push_str("---\n");
+            output.push_str(&format!("title: \"{}\"\n", title));
+            output.push_str(&format!("author: \"{}\"\n", author));
+            output.push_str(&format!("source: \"{}\"\n", book.path));
+            output.push_str(&format!(
+                "exported: {}\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            ));
+            output.push_str("tags: [tbook, reading-notes]\n");
+            output.push_str("---\n\n");
+
+            output.push_str(&format!("# Reading Notes: {}\n\n", title));
+
             for a in annos {
-                output.push_str(&format!("## Chapter {}\n", a.chapter + 1));
-                output.push_str(&format!("> {}\n\n", a.content));
+                output.push_str(&format!("### Chapter {}\n", a.chapter + 1));
+                output.push_str(&format!("> {}\n", a.content.replace("\n", "\n> ")));
                 if let Some(note) = a.note {
-                    output.push_str(&format!("**Note:** {}\n\n", note));
+                    output.push_str(&format!("\n**Note:** {}\n", note));
                 }
-                output.push_str("---\n\n");
+                output.push_str("\n---\n\n");
             }
-            let filename = format!("export_{}.md", book.id);
+            let filename = format!("notes_{}.md", title.to_lowercase().replace(" ", "_"));
             std::fs::write(&filename, output)?;
             Ok(filename)
         } else {

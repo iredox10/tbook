@@ -7,6 +7,7 @@ pub mod library;
 pub mod path_input;
 pub mod reader;
 pub mod rsvp;
+pub mod stats;
 pub mod toc;
 pub mod vocabulary;
 
@@ -31,6 +32,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         AppView::Help => {
             help::render(f, app);
         }
+        AppView::Stats => stats::render(f, app),
     }
 
     if app.view == AppView::Help {

@@ -1,0 +1,27 @@
+{
+  "name": "tbook-reader",
+  "version": "0.1.0",
+  "description": "A premium Terminal E-book Reader with support for EPUB, PDF, and high-res images",
+  "bin": {
+    "tbook": "bin/tbook.js"
+  },
+  "scripts": {
+    "start": "cargo run --release",
+    "build": "cargo build --release",
+    "test": "cargo test"
+  },
+  "keywords": [
+    "tui",
+    "reader",
+    "epub",
+    "pdf",
+    "terminal",
+    "rust"
+  ],
+  "author": "iredox",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iredox/tbook.git"
+  }
+}
