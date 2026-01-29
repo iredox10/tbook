@@ -693,11 +693,16 @@ impl App {
 
     pub fn add_quick_highlight(&mut self) -> Result<()> {
         let range = self.get_selection_range();
-        let content = self.get_selected_text();
+        let selected_text = if range.is_some() {
+            self.get_selected_text()
+        } else {
+            String::new()
+        };
 
         if let Some(ref mut book) = self.current_book {
+            // If we have a selection range (Visual mode), highlight it.
             if let Some((sl, sw, el, ew)) = range {
-                if !content.is_empty() {
+                if !selected_text.is_empty() {
                     self.db.add_annotation(
                         book.id,
                         book.current_chapter,
@@ -705,18 +710,40 @@ impl App {
                         sw,
                         el,
                         ew,
-                        &content,
+                        &selected_text,
                         None,
                     )?;
-                    book.chapter_annotations = self
-                        .db
-                        .get_annotations(book.id)?
-                        .into_iter()
-                        .filter(|a| a.chapter == book.current_chapter)
-                        .collect();
+                }
+            } else {
+                // Otherwise, highlight the current word (useful in Select mode).
+                if let Some(crate::app::RenderLine::Text(line)) =
+                    book.chapter_content.get(book.current_line)
+                {
+                    if let Some(word) = line.split_whitespace().nth(book.word_index) {
+                        if !word.is_empty() {
+                            self.db.add_annotation(
+                                book.id,
+                                book.current_chapter,
+                                book.current_line,
+                                book.word_index,
+                                book.current_line,
+                                book.word_index,
+                                word,
+                                None,
+                            )?;
+                        }
+                    }
                 }
             }
+
+            book.chapter_annotations = self
+                .db
+                .get_annotations(book.id)?
+                .into_iter()
+                .filter(|a| a.chapter == book.current_chapter)
+                .collect();
         }
+
         self.exit_visual_mode();
         Ok(())
     }

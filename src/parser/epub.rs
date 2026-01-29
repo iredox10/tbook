@@ -56,10 +56,15 @@ impl EpubParser {
         let content_str = String::from_utf8_lossy(&content_bytes);
 
         let mut result_items = Vec::new();
-        // Regex to find <img> or <image> tags with src/href
-        // NOTE: This is a simplistic regex approach and might fail on complex HTML, but works for most EPUBs
+        // Regex to find inline images.
+        // Covers common EPUB patterns:
+        // - <img src="...">
+        // - <img srcset="...">
+        // - <image href="..."> (SVG)
+        // - <image xlink:href="..."> (SVG)
+        // NOTE: This is still a best-effort regex approach and may miss CSS background images.
         let re = Regex::new(
-            r#"(?i)<(?:img[^>]+src=["']([^"']+)["']|image[^>]+href=["']([^"']+)["'])[^>]*>"#,
+            r#"(?i)<(?:img[^>]+(?:src=["']([^"']+)["']|srcset=["']([^"']+)["'])|image[^>]+(?:href=["']([^"']+)["']|xlink:href=["']([^"']+)["']))[^>]*>"#,
         )
         .unwrap();
 
@@ -83,32 +88,79 @@ impl EpubParser {
             }
 
             // Extract Image
-            let src = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
-            if !src.is_empty() {
-                // Try direct match
-                let mut img_data = self.doc.get_resource(src);
+            let mut src = cap
+                .get(1)
+                .or(cap.get(2))
+                .or(cap.get(3))
+                .or(cap.get(4))
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .to_string();
 
-                // If not found, try to resolve relative path or just match by filename
-                if img_data.is_none() {
-                    let filename = Path::new(src)
+            // If this was a srcset, take the first URL.
+            // Format is typically: "url1 1x, url2 2x" or "url1 300w, url2 600w".
+            if src.contains(',') || src.contains(' ') {
+                let first = src
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !first.is_empty() {
+                    src = first.to_string();
+                }
+            }
+            if !src.is_empty() {
+                let mut resolved_bytes: Option<Vec<u8>> = None;
+
+                // `get_current_with_epub_uris()` rewrites img/image URLs into `epub://<path>`.
+                // Prefer fetching by full archive path since `get_resource()` expects a manifest id.
+                if let Some(rest) = src.strip_prefix("epub://") {
+                    let path_str = rest
+                        .split('#')
+                        .next()
+                        .unwrap_or(rest)
+                        .split('?')
+                        .next()
+                        .unwrap_or(rest);
+                    resolved_bytes = self.doc.get_resource_by_path(path_str);
+                }
+
+                // Try manifest id match
+                let mut img_data = if resolved_bytes.is_none() {
+                    self.doc.get_resource(&src)
+                } else {
+                    None
+                };
+
+                // If not found, try to resolve by filename against manifest paths.
+                if resolved_bytes.is_none() && img_data.is_none() {
+                    let filename = Path::new(&src)
                         .file_name()
                         .and_then(|s| s.to_str())
                         .unwrap_or("");
                     if !filename.is_empty() {
-                        // Search in all resources for this filename
-                        let found_key = self
-                            .doc
-                            .resources
-                            .keys()
-                            .find(|k| k.ends_with(filename))
-                            .cloned();
-                        if let Some(key) = found_key {
-                            img_data = self.doc.get_resource(&key);
+                        // Search in all resources for a path ending with this filename.
+                        let found_path = self.doc.resources.values().find_map(|r| {
+                            let p = r.path.to_string_lossy();
+                            if p.ends_with(filename) {
+                                Some(r.path.clone())
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(p) = found_path {
+                            resolved_bytes = self.doc.get_resource_by_path(p);
                         }
                     }
                 }
 
-                if let Some((img_bytes, _)) = img_data {
+                let img_bytes_opt = resolved_bytes.or_else(|| img_data.take().map(|(b, _)| b));
+
+                if let Some(img_bytes) = img_bytes_opt {
                     if let Ok(img) = image::load_from_memory(&img_bytes) {
                         result_items.push(PageContent::Image(Arc::new(img)));
                     } else {

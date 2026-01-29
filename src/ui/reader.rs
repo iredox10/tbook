@@ -10,17 +10,17 @@ use ratatui_image::StatefulImage;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
-fn wrap_words_to_lines<'a>(words: &'a [&'a str], max_width: u16) -> Vec<Vec<&'a str>> {
+fn wrap_words_to_lines<'a>(words: &'a [&'a str], max_width: u16) -> Vec<Vec<(usize, &'a str)>> {
     let max_width = max_width as usize;
     if max_width == 0 {
         return vec![Vec::new()];
     }
 
-    let mut out: Vec<Vec<&str>> = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
+    let mut out: Vec<Vec<(usize, &str)>> = Vec::new();
+    let mut current: Vec<(usize, &str)> = Vec::new();
     let mut current_w = 0usize;
 
-    for w in words {
+    for (idx, w) in words.iter().enumerate() {
         let ww = UnicodeWidthStr::width(*w);
         let add_space = if current.is_empty() { 0 } else { 1 };
         if !current.is_empty() && current_w + add_space + ww > max_width {
@@ -31,7 +31,7 @@ fn wrap_words_to_lines<'a>(words: &'a [&'a str], max_width: u16) -> Vec<Vec<&'a 
         if !current.is_empty() {
             current_w += 1;
         }
-        current.push(*w);
+        current.push((idx, *w));
         current_w += ww;
     }
 
@@ -46,7 +46,7 @@ fn wrap_words_to_lines<'a>(words: &'a [&'a str], max_width: u16) -> Vec<Vec<&'a 
 
 pub fn render(f: &mut Frame, app: &mut App) {
     // Call these before mutably borrowing book
-    let _selection = app.get_selection_range();
+    let selection = app.get_selection_range();
     let (_, wpm) = app.get_reading_stats();
 
     if let Some(ref mut book) = app.current_book {
@@ -146,11 +146,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         let words: Vec<&str> = text.split_whitespace().collect();
 
                         if words.is_empty() {
+                            let mut style = Style::default().fg(fg).bg(bg);
+                            if let Some((sl, _, el, _)) = selection {
+                                if logical_i > sl && logical_i < el {
+                                    style = style.bg(Color::Rgb(60, 60, 100));
+                                }
+                            }
                             f.render_widget(
-                                Paragraph::new(Line::from(Span::styled(
-                                    " ",
-                                    Style::default().fg(fg).bg(bg),
-                                ))),
+                                Paragraph::new(Line::from(Span::styled(" ", style))),
                                 line_area,
                             );
                             y = y.saturating_add(1);
@@ -187,6 +190,38 @@ pub fn render(f: &mut Frame, app: &mut App) {
                                 }
                             }
 
+                            // Active selection highlight
+                            let is_selected = if let Some((sl, sw, el, ew)) = selection {
+                                if logical_i > sl && logical_i < el {
+                                    true
+                                } else if logical_i == sl && logical_i == el {
+                                    wi >= sw && wi <= ew
+                                } else if logical_i == sl {
+                                    wi >= sw
+                                } else if logical_i == el {
+                                    wi <= ew
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                            if is_selected {
+                                style = style.bg(Color::Rgb(60, 60, 120)).fg(Color::White);
+                            }
+
+                            // Cursor highlight (Select/Visual)
+                            if (app.view == AppView::Select || app.view == AppView::Visual)
+                                && logical_i == book.current_line
+                                && wi == book.word_index
+                            {
+                                style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                                if app.view == AppView::Visual {
+                                    style = style.add_modifier(Modifier::UNDERLINED);
+                                }
+                            }
+
                             spans.push(Span::styled(format!("{} ", word), style));
                         }
 
@@ -214,11 +249,37 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         };
 
                         let mut spans = Vec::new();
-                        for w in line_words {
-                            spans.push(Span::styled(
-                                format!("{} ", w),
-                                Style::default().fg(fg).bg(bg),
-                            ));
+                        for (wi, w) in line_words {
+                            let mut style = Style::default().fg(fg).bg(bg);
+
+                            // Persistent chapter highlights/annotations
+                            for anno in &book.chapter_annotations {
+                                let is_in_anno = if logical_i > anno.start_line
+                                    && logical_i < anno.end_line
+                                {
+                                    true
+                                } else if logical_i == anno.start_line && logical_i == anno.end_line
+                                {
+                                    wi >= anno.start_word && wi <= anno.end_word
+                                } else if logical_i == anno.start_line {
+                                    wi >= anno.start_word
+                                } else if logical_i == anno.end_line {
+                                    wi <= anno.end_word
+                                } else {
+                                    false
+                                };
+
+                                if is_in_anno {
+                                    style = if anno.note.is_some() {
+                                        style.bg(Color::Rgb(40, 80, 40))
+                                    } else {
+                                        style.bg(Color::Rgb(80, 60, 40))
+                                    };
+                                    break;
+                                }
+                            }
+
+                            spans.push(Span::styled(format!("{} ", w), style));
                         }
 
                         f.render_widget(
