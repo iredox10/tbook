@@ -6,6 +6,7 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{protocol::StatefulProtocol, FilterType, Resize, StatefulImage};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let (bg, fg) = match app.theme {
@@ -100,11 +101,27 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let cover_inner = cover_block.inner(info_chunks[0]);
         f.render_widget(cover_block, info_chunks[0]);
 
+        let selected_id = selected_book.id;
+        let is_cover_loading = app.current_library_cover.is_none()
+            && !app.cover_cache.contains_key(&selected_id)
+            && !app.cover_missing.contains(&selected_id);
+
         if let Some(ref mut protocol) = app.current_library_cover {
             // Use a higher quality resize filter so downscaled covers look less muddy.
             let widget = StatefulImage::<StatefulProtocol>::default()
                 .resize(Resize::Fit(Some(FilterType::Lanczos3)));
             f.render_stateful_widget(widget, cover_inner, protocol);
+        } else if is_cover_loading {
+            const SPINNER: [&str; 4] = ["-", "\\", "|", "/"];
+            let ticks = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as usize)
+                .unwrap_or(0);
+            let spinner = SPINNER[(ticks / 120) % SPINNER.len()];
+            let loading = Paragraph::new(format!("\n\n\nLoading cover {}", spinner))
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(loading, cover_inner);
         } else {
             let no_cover = Paragraph::new("\n\n\n[ No Cover Preview ]")
                 .alignment(ratatui::layout::Alignment::Center)

@@ -40,9 +40,9 @@ impl PdfParser {
         self.page_count
     }
 
-    pub fn get_cover_image(&self) -> Result<image::DynamicImage> {
-        // Use the first page as a reasonable "cover".
-        self.render_page_image(1)
+    pub fn get_cover_image_preview(&self) -> Result<image::DynamicImage> {
+        // Lower DPI for faster preview rendering in library.
+        self.render_page_image_with_dpi(1, 120)
     }
 
     pub fn get_chapter_content(&mut self, index: usize) -> Result<Vec<crate::parser::PageContent>> {
@@ -87,6 +87,10 @@ impl PdfParser {
     }
 
     fn render_page_image(&self, page_num: usize) -> Result<image::DynamicImage> {
+        self.render_page_image_with_dpi(page_num, 150)
+    }
+
+    fn render_page_image_with_dpi(&self, page_num: usize, dpi: u32) -> Result<image::DynamicImage> {
         let tmp = std::env::temp_dir();
         let unique = format!(
             "tbook_pdf_{}_{}_{}",
@@ -108,7 +112,7 @@ impl PdfParser {
                 "-png",
                 "-singlefile",
                 "-r",
-                "150",
+                &dpi.to_string(),
                 &self.path,
                 root_str,
             ])

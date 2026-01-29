@@ -1,7 +1,10 @@
 use crate::db::{AnnotationRecord, BookRecord, Db, VocabRecord};
 use crate::parser::{BookParser, EpubParser, PageContent, PdfParser};
 use anyhow::Result;
+use image::imageops::FilterType;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -81,6 +84,10 @@ pub struct App {
     pub is_scanning: bool,
     pub image_picker: Picker,
     pub current_library_cover: Option<StatefulProtocol>,
+    pub cover_cache: HashMap<i32, Arc<image::DynamicImage>>,
+    pub cover_missing: HashSet<i32>,
+    pub pending_cover_requests: HashSet<i32>,
+    pub last_library_selection: Option<i32>,
     // Auto-scroll State
     pub auto_scroll_active: bool,
     pub auto_scroll_interval_ms: u64,
@@ -102,6 +109,17 @@ pub struct LoadedBook {
     pub start_time: Instant,
     pub words_read: usize,
     pub session_words_logged: usize,
+}
+
+#[derive(Clone)]
+pub struct CoverRequest {
+    pub book_id: i32,
+    pub path: String,
+}
+
+pub struct CoverResponse {
+    pub book_id: i32,
+    pub image: Option<image::DynamicImage>,
 }
 
 impl App {
@@ -144,6 +162,10 @@ impl App {
             // Picker::from_query_stdio() after entering alternate screen.
             image_picker: Picker::halfblocks(),
             current_library_cover: None,
+            cover_cache: HashMap::new(),
+            cover_missing: HashSet::new(),
+            pending_cover_requests: HashSet::new(),
+            last_library_selection: None,
             auto_scroll_active: false,
             auto_scroll_interval_ms: 2000, // Default scroll every 2 seconds
             auto_scroll_last_tick: Instant::now(),
@@ -154,7 +176,19 @@ impl App {
 
     pub fn refresh_library(&mut self) -> Result<()> {
         self.books = self.db.get_books()?;
-        self.load_selected_book_preview().ok();
+        if self.books.is_empty() {
+            self.selected_book_index = 0;
+            self.current_library_cover = None;
+            self.last_library_selection = None;
+        } else if self.selected_book_index >= self.books.len() {
+            self.selected_book_index = 0;
+        }
+        if !self.books.is_empty() {
+            let valid_ids: HashSet<i32> = self.books.iter().map(|b| b.id).collect();
+            self.cover_cache.retain(|id, _| valid_ids.contains(id));
+            self.cover_missing.retain(|id| valid_ids.contains(id));
+            self.pending_cover_requests.retain(|id| valid_ids.contains(id));
+        }
         Ok(())
     }
 
@@ -173,30 +207,91 @@ impl App {
         Ok(())
     }
 
-    pub fn load_selected_book_preview(&mut self) -> Result<()> {
-        self.current_library_cover = None;
+    pub fn cover_request_for_selected(&mut self) -> Option<CoverRequest> {
         if self.books.is_empty() {
-            return Ok(());
+            self.current_library_cover = None;
+            return None;
         }
+
         let book_record = &self.books[self.selected_book_index];
+        let book_id = book_record.id;
 
-        if book_record.path.to_lowercase().ends_with(".epub") {
-            let mut epub = EpubParser::new(&book_record.path)?;
-            if let Some(cover) = epub.get_cover_best_effort() {
-                self.current_library_cover = Some(self.image_picker.new_resize_protocol(cover));
-            }
-            return Ok(());
+        if self.last_library_selection != Some(book_id) {
+            self.last_library_selection = Some(book_id);
+            self.current_library_cover = None;
         }
 
-        if book_record.path.to_lowercase().ends_with(".pdf") {
-            let pdf = PdfParser::new(&book_record.path)?;
-            if let Ok(cover) = pdf.get_cover_image() {
-                self.current_library_cover = Some(self.image_picker.new_resize_protocol(cover));
-            }
-            return Ok(());
+        if let Some(image) = self.cover_cache.get(&book_id) {
+            self.current_library_cover =
+                Some(self.image_picker.new_resize_protocol(image.as_ref().clone()));
+            return None;
         }
 
-        Ok(())
+        if self.cover_missing.contains(&book_id) {
+            return None;
+        }
+
+        if self.pending_cover_requests.contains(&book_id) {
+            return None;
+        }
+
+        Some(CoverRequest {
+            book_id,
+            path: book_record.path.clone(),
+        })
+    }
+
+    pub fn mark_cover_request_in_flight(&mut self, book_id: i32) {
+        self.pending_cover_requests.insert(book_id);
+    }
+
+    pub fn apply_cover_response(&mut self, response: CoverResponse) {
+        self.pending_cover_requests.remove(&response.book_id);
+
+        let Some(image) = response.image else {
+            self.cover_missing.insert(response.book_id);
+            return;
+        };
+
+        let image = Arc::new(image);
+        self.cover_cache.insert(response.book_id, Arc::clone(&image));
+        self.cover_missing.remove(&response.book_id);
+
+        if self.last_library_selection == Some(response.book_id) {
+            self.current_library_cover =
+                Some(self.image_picker.new_resize_protocol(image.as_ref().clone()));
+        }
+    }
+
+    pub fn load_cover_image(path: &str) -> Option<image::DynamicImage> {
+        let lower = path.to_lowercase();
+        if lower.ends_with(".epub") {
+            let mut epub = EpubParser::new(path).ok()?;
+            let cover = epub.get_cover_best_effort()?;
+            return Some(Self::downscale_cover(cover));
+        }
+
+        if lower.ends_with(".pdf") {
+            let pdf = PdfParser::new(path).ok()?;
+            let cover = pdf.get_cover_image_preview().ok()?;
+            return Some(Self::downscale_cover(cover));
+        }
+
+        None
+    }
+
+    fn downscale_cover(image: image::DynamicImage) -> image::DynamicImage {
+        const MAX_COVER_DIM: u32 = 640;
+        let (w, h) = (image.width(), image.height());
+        let max_dim = w.max(h);
+        if max_dim <= MAX_COVER_DIM {
+            return image;
+        }
+
+        let scale = MAX_COVER_DIM as f32 / max_dim as f32;
+        let new_w = (w as f32 * scale).round().max(1.0) as u32;
+        let new_h = (h as f32 * scale).round().max(1.0) as u32;
+        image.resize(new_w, new_h, FilterType::Triangle)
     }
 
     pub fn open_selected_book(&mut self) -> Result<()> {

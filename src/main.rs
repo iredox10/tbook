@@ -10,11 +10,13 @@ use config::AppConfig;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, window_size,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use ratatui_image::picker::Picker;
-use std::{io, time::Duration};
+use ratatui_image::picker::{Picker, ProtocolType};
+use std::{io, time::{Duration, Instant}};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -52,8 +54,7 @@ async fn main() -> Result<()> {
 
     // Query terminal capabilities (protocol + pixel cell size) after entering alt screen.
     // This improves Kitty/Ghostty image sharpness vs guessing.
-    app.image_picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-    app.load_selected_book_preview().ok();
+    app.image_picker = build_image_picker();
 
     let res = run_app(&mut terminal, app).await;
 
@@ -70,6 +71,53 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn prefers_kitty_protocol() -> bool {
+    let term = std::env::var("TERM").unwrap_or_default().to_lowercase();
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase();
+    term.contains("kitty")
+        || term.contains("ghostty")
+        || term_program.contains("kitty")
+        || term_program.contains("ghostty")
+        || std::env::var("KITTY_WINDOW_ID").is_ok()
+}
+
+fn build_image_picker() -> Picker {
+    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+
+    if picker.protocol_type() == ProtocolType::Halfblocks {
+        if let Ok(win) = window_size() {
+            if win.columns > 0 && win.rows > 0 && win.width > 0 && win.height > 0 {
+                let cell_width = win.width / win.columns;
+                let cell_height = win.height / win.rows;
+                if cell_width > 0 && cell_height > 0 {
+                    #[allow(deprecated)]
+                    let mut fallback = Picker::from_fontsize((cell_width, cell_height));
+                    if prefers_kitty_protocol() {
+                        fallback.set_protocol_type(ProtocolType::Kitty);
+                    }
+                    picker = fallback;
+                }
+            }
+        }
+    }
+
+    picker
+}
+
+fn schedule_cover_request(
+    app: &mut App,
+    pending_cover_request: &mut Option<app::CoverRequest>,
+    pending_cover_deadline: &mut Option<Instant>,
+    delay: Duration,
+) {
+    *pending_cover_request = None;
+    *pending_cover_deadline = None;
+    if let Some(req) = app.cover_request_for_selected() {
+        *pending_cover_request = Some(req);
+        *pending_cover_deadline = Some(Instant::now() + delay);
+    }
 }
 
 fn add_book_to_db(app: &mut App, path: &str) -> Result<()> {
@@ -92,6 +140,37 @@ async fn run_app<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let (tx_dict, mut rx_dict) = tokio::sync::mpsc::channel::<String>(10);
     let (tx_scan, mut rx_scan) = tokio::sync::mpsc::channel::<Vec<std::path::PathBuf>>(1);
+    let (tx_cover, mut rx_cover) = tokio::sync::mpsc::channel::<app::CoverResponse>(4);
+    let (tx_cover_req, mut rx_cover_req) =
+        tokio::sync::watch::channel::<Option<app::CoverRequest>>(None);
+
+    let cover_debounce = Duration::from_millis(150);
+    let mut pending_cover_request: Option<app::CoverRequest> = None;
+    let mut pending_cover_deadline: Option<Instant> = None;
+
+    let tx_cover_worker = tx_cover.clone();
+    tokio::spawn(async move {
+        while rx_cover_req.changed().await.is_ok() {
+            let req = rx_cover_req.borrow().clone();
+            let Some(req) = req else {
+                continue;
+            };
+            let image = App::load_cover_image(&req.path);
+            let _ = tx_cover_worker
+                .send(app::CoverResponse {
+                    book_id: req.book_id,
+                    image,
+                })
+                .await;
+        }
+    });
+
+    schedule_cover_request(
+        &mut app,
+        &mut pending_cover_request,
+        &mut pending_cover_deadline,
+        Duration::from_millis(0),
+    );
 
     loop {
         let term_size = terminal
@@ -102,6 +181,10 @@ async fn run_app<B: ratatui::backend::Backend>(
         terminal
             .draw(|f| ui::render(f, &mut app))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        if let Ok(response) = rx_cover.try_recv() {
+            app.apply_cover_response(response);
+        }
 
         if let Ok(res) = rx_dict.try_recv() {
             app.dictionary_result = res.clone();
@@ -120,6 +203,20 @@ async fn run_app<B: ratatui::backend::Backend>(
                 app.scroll_viewport_down();
                 app.auto_scroll_last_tick = std::time::Instant::now();
             }
+        }
+
+        if app.view == AppView::Library {
+            if let (Some(req), Some(deadline)) = (&pending_cover_request, pending_cover_deadline) {
+                if Instant::now() >= deadline {
+                    app.mark_cover_request_in_flight(req.book_id);
+                    let _ = tx_cover_req.send(Some(req.clone()));
+                    pending_cover_request = None;
+                    pending_cover_deadline = None;
+                }
+            }
+        } else {
+            pending_cover_request = None;
+            pending_cover_deadline = None;
         }
 
         if event::poll(Duration::from_millis(10))? {
@@ -149,7 +246,16 @@ async fn run_app<B: ratatui::backend::Backend>(
             if let Event::Key(key) = ev {
                 if key.code == KeyCode::Char('?') {
                     if app.view == AppView::Help {
-                        app.view = app.previous_view.take().unwrap_or(AppView::Library);
+                        let next_view = app.previous_view.take().unwrap_or(AppView::Library);
+                        app.view = next_view;
+                        if app.view == AppView::Library {
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
+                        }
                     } else {
                         app.previous_view = Some(app.view);
                         app.view = AppView::Help;
@@ -160,7 +266,16 @@ async fn run_app<B: ratatui::backend::Backend>(
                 match app.view {
                     AppView::Help => {
                         if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-                            app.view = app.previous_view.take().unwrap_or(AppView::Library);
+                            let next_view = app.previous_view.take().unwrap_or(AppView::Library);
+                            app.view = next_view;
+                            if app.view == AppView::Library {
+                                schedule_cover_request(
+                                    &mut app,
+                                    &mut pending_cover_request,
+                                    &mut pending_cover_deadline,
+                                    Duration::from_millis(0),
+                                );
+                            }
                         }
                     }
                     AppView::Library => match key.code {
@@ -169,8 +284,13 @@ async fn run_app<B: ratatui::backend::Backend>(
                             // Cycle image protocols to debug cover rendering across terminals.
                             let next = app.image_picker.protocol_type().next();
                             app.image_picker.set_protocol_type(next);
-                            app.load_selected_book_preview().ok();
                             app.refresh_current_book_render_cache().ok();
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
                         }
                         KeyCode::Char('n') => {
                             app.explorer_path = dirs::home_dir()
@@ -191,7 +311,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                             if !app.books.is_empty() {
                                 app.selected_book_index =
                                     (app.selected_book_index + 1) % app.books.len();
-                                app.load_selected_book_preview().ok();
+                                schedule_cover_request(
+                                    &mut app,
+                                    &mut pending_cover_request,
+                                    &mut pending_cover_deadline,
+                                    cover_debounce,
+                                );
                             }
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
@@ -201,7 +326,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 } else {
                                     app.selected_book_index = app.books.len() - 1;
                                 }
-                                app.load_selected_book_preview().ok();
+                                schedule_cover_request(
+                                    &mut app,
+                                    &mut pending_cover_request,
+                                    &mut pending_cover_deadline,
+                                    cover_debounce,
+                                );
                             }
                         }
                         KeyCode::Enter => {
@@ -210,11 +340,27 @@ async fn run_app<B: ratatui::backend::Backend>(
                         _ => {}
                     },
                     AppView::Stats => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => app.view = AppView::Library,
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            app.view = AppView::Library;
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
+                        }
                         _ => {}
                     },
                     AppView::PathInput => match key.code {
-                        KeyCode::Esc => app.view = AppView::Library,
+                        KeyCode::Esc => {
+                            app.view = AppView::Library;
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
+                        }
                         KeyCode::Enter => {
                             app.view = AppView::FileExplorer;
                             app.is_scanning = true;
@@ -236,6 +382,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Esc | KeyCode::Char('q') => {
                             if !app.is_scanning {
                                 app.view = AppView::Library;
+                                schedule_cover_request(
+                                    &mut app,
+                                    &mut pending_cover_request,
+                                    &mut pending_cover_deadline,
+                                    Duration::from_millis(0),
+                                );
                             }
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
@@ -262,13 +414,27 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     add_book_to_db(&mut app, &p_str).ok();
                                     app.refresh_library().ok();
                                     app.view = AppView::Library;
+                                    schedule_cover_request(
+                                        &mut app,
+                                        &mut pending_cover_request,
+                                        &mut pending_cover_deadline,
+                                        Duration::from_millis(0),
+                                    );
                                 }
                             }
                         }
                         _ => {}
                     },
                     AppView::GlobalSearch => match key.code {
-                        KeyCode::Esc => app.view = AppView::Library,
+                        KeyCode::Esc => {
+                            app.view = AppView::Library;
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
+                        }
                         KeyCode::Enter => {
                             if !app.global_search_results.is_empty() {
                                 let res = &app.global_search_results[app.selected_search_index];
@@ -310,6 +476,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.save_progress().ok();
                             app.view = AppView::Library;
                             app.refresh_library().ok();
+                            schedule_cover_request(
+                                &mut app,
+                                &mut pending_cover_request,
+                                &mut pending_cover_deadline,
+                                Duration::from_millis(0),
+                            );
                         }
                         KeyCode::Char('s') => app.view = AppView::Select,
                         KeyCode::Char('A') => {
