@@ -2,7 +2,7 @@ use crate::app::{App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
@@ -68,7 +68,11 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
         )
         .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">> ");
-    f.render_widget(list, chunks[0]);
+    let mut list_state = ListState::default();
+    if !app.current_annotations.is_empty() {
+        list_state.select(Some(app.selected_annotation_index));
+    }
+    f.render_stateful_widget(list, chunks[0], &mut list_state);
 }
 
 fn get_theme_colors(theme: Theme) -> (Color, Color) {

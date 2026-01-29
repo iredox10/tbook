@@ -194,6 +194,14 @@ async fn run_app<B: ratatui::backend::Backend>(
         if let Ok(results) = rx_scan.try_recv() {
             app.explorer_results = results;
             app.is_scanning = false;
+            app.selected_explorer_index = 0;
+            app.explorer_selected.clear();
+            if std::path::Path::new(&app.explorer_path).is_file()
+                && app.explorer_results.len() == 1
+            {
+                app.explorer_selected
+                    .insert(app.explorer_results[0].clone());
+            }
         }
 
         // Auto-scroll logic
@@ -390,6 +398,35 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 );
                             }
                         }
+                        KeyCode::Char(' ') => {
+                            if !app.is_scanning {
+                                app.toggle_explorer_selection();
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            if !app.is_scanning {
+                                app.select_all_explorer_results();
+                            }
+                        }
+                        KeyCode::Char('c') => {
+                            if !app.is_scanning {
+                                app.clear_explorer_selection();
+                            }
+                        }
+                        KeyCode::Char('i') => {
+                            if !app.is_scanning {
+                                app.select_all_explorer_results();
+                                let _ = app.import_explorer_selection();
+                                app.refresh_library().ok();
+                                app.view = AppView::Library;
+                                schedule_cover_request(
+                                    &mut app,
+                                    &mut pending_cover_request,
+                                    &mut pending_cover_deadline,
+                                    Duration::from_millis(0),
+                                );
+                            }
+                        }
                         KeyCode::Down | KeyCode::Char('j') => {
                             if !app.explorer_results.is_empty() {
                                 app.selected_explorer_index =
@@ -407,11 +444,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                         }
                         KeyCode::Enter => {
                             if !app.is_scanning {
-                                if let Some(path) =
-                                    app.explorer_results.get(app.selected_explorer_index)
-                                {
-                                    let p_str = path.to_string_lossy().to_string();
-                                    add_book_to_db(&mut app, &p_str).ok();
+                                if !app.explorer_results.is_empty() {
+                                    let _ = app.import_explorer_selection();
                                     app.refresh_library().ok();
                                     app.view = AppView::Library;
                                     schedule_cover_request(

@@ -23,7 +23,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Fill background
     f.render_widget(Block::default().style(Style::default().bg(bg)), f.area());
 
-    let title = Paragraph::new(" Enter Directory Path to Scan ")
+    let title = Paragraph::new(" Enter File or Directory Path ")
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -47,7 +47,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .alignment(Alignment::Left);
     f.render_widget(input, chunks[1]);
 
-    let help = Paragraph::new(" [Enter] Start Scan | [Esc] Cancel ")
+    let help = Paragraph::new(" [Enter] Scan/Select | [Esc] Cancel ")
         .alignment(Alignment::Center)
         .style(Style::default().fg(fg).bg(bg));
     let help_chunks = Layout::default()

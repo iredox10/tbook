@@ -4,6 +4,7 @@ use anyhow::Result;
 use image::imageops::FilterType;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use walkdir::WalkDir;
@@ -80,6 +81,7 @@ pub struct App {
     // Explorer State
     pub explorer_path: String,
     pub explorer_results: Vec<std::path::PathBuf>,
+    pub explorer_selected: HashSet<PathBuf>,
     pub selected_explorer_index: usize,
     pub is_scanning: bool,
     pub image_picker: Picker,
@@ -156,6 +158,7 @@ impl App {
             selected_search_index: 0,
             explorer_path: String::new(),
             explorer_results: Vec::new(),
+            explorer_selected: HashSet::new(),
             selected_explorer_index: 0,
             is_scanning: false,
             // Initialized to a reasonable default; in TUI mode this should be replaced with
@@ -190,6 +193,68 @@ impl App {
             self.pending_cover_requests.retain(|id| valid_ids.contains(id));
         }
         Ok(())
+    }
+
+    pub fn toggle_explorer_selection(&mut self) {
+        if let Some(path) = self.explorer_results.get(self.selected_explorer_index) {
+            if !self.explorer_selected.insert(path.clone()) {
+                self.explorer_selected.remove(path);
+            }
+        }
+    }
+
+    pub fn select_all_explorer_results(&mut self) {
+        self.explorer_selected = self.explorer_results.iter().cloned().collect();
+    }
+
+    pub fn clear_explorer_selection(&mut self) {
+        self.explorer_selected.clear();
+    }
+
+    pub fn import_explorer_selection(&mut self) -> Result<usize> {
+        if self.explorer_results.is_empty() {
+            return Ok(0);
+        }
+
+        let paths: Vec<PathBuf> = if self.explorer_selected.is_empty() {
+            self.explorer_results
+                .get(self.selected_explorer_index)
+                .map(|p| vec![p.clone()])
+                .unwrap_or_default()
+        } else {
+            self.explorer_selected.iter().cloned().collect()
+        };
+
+        let imported = self.import_paths(&paths)?;
+        self.clear_explorer_selection();
+        Ok(imported)
+    }
+
+    fn import_paths(&mut self, paths: &[PathBuf]) -> Result<usize> {
+        let mut imported = 0;
+        for path in paths {
+            let path_str = path.to_string_lossy().to_string();
+            let lower = path_str.to_lowercase();
+            let parser = if lower.ends_with(".pdf") {
+                PdfParser::new(&path_str).ok().map(BookParser::Pdf)
+            } else if lower.ends_with(".epub") {
+                EpubParser::new(&path_str).ok().map(BookParser::Epub)
+            } else {
+                None
+            };
+
+            let Some(parser) = parser else {
+                continue;
+            };
+
+            let (title, author) = parser.get_metadata();
+            let total_chapters = parser.get_chapter_count();
+            let total_lines = 0;
+            self.db
+                .add_book(&title, &author, &path_str, total_chapters, total_lines)?;
+            imported += 1;
+        }
+        Ok(imported)
     }
 
     pub fn refresh_current_book_render_cache(&mut self) -> Result<()> {
@@ -999,6 +1064,20 @@ impl App {
 
     pub fn scan_for_books_sync(path: String) -> Vec<std::path::PathBuf> {
         let mut results = Vec::new();
+        let root = Path::new(&path);
+
+        if root.is_file() {
+            let ext = root
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if ext == "epub" || ext == "pdf" {
+                results.push(root.to_path_buf());
+            }
+            return results;
+        }
+
         for entry in WalkDir::new(path)
             .follow_links(true)
             .into_iter()
@@ -1016,6 +1095,8 @@ impl App {
                 }
             }
         }
+        results.sort();
+        results.dedup();
         results
     }
 

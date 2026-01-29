@@ -2,7 +2,7 @@ use crate::app::{App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use ratatui_image::{protocol::StatefulProtocol, FilterType, Resize, StatefulImage};
@@ -80,7 +80,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         )
         .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">> ");
-    f.render_widget(list, main_chunks[0]);
+    let mut list_state = ListState::default();
+    if !app.books.is_empty() {
+        list_state.select(Some(app.selected_book_index));
+    }
+    f.render_stateful_widget(list, main_chunks[0], &mut list_state);
 
     // Book Info & Cover Preview
     if let Some(selected_book) = app.books.get(app.selected_book_index) {

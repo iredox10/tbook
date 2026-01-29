@@ -2,7 +2,7 @@ use crate::app::{App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
@@ -47,7 +47,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 .style(Style::default().fg(fg).bg(bg)),
         )
         .highlight_symbol(">> ");
-    f.render_widget(list, chunks[0]);
+    let mut list_state = ListState::default();
+    if !app.vocabulary.is_empty() {
+        list_state.select(Some(app.selected_vocab_index));
+    }
+    f.render_stateful_widget(list, chunks[0], &mut list_state);
 
     // Definition display
     if let Some(vocab) = app.vocabulary.get(app.selected_vocab_index) {
