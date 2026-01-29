@@ -140,7 +140,14 @@ impl App {
             explorer_results: Vec::new(),
             selected_explorer_index: 0,
             is_scanning: false,
-            image_picker: Picker::from_termios().unwrap_or_else(|_| Picker::new((8, 16))),
+            image_picker: {
+                let mut picker =
+                    Picker::from_termios().unwrap_or_else(|_| Picker::new((8, 16)));
+                // Default Picker protocol is Halfblocks (low-res). Guess a better protocol
+                // (Kitty/Sixel/iTerm2) so covers and inline images render sharply.
+                let _ = picker.guess_protocol();
+                picker
+            },
             current_library_cover: None,
             auto_scroll_active: false,
             auto_scroll_interval_ms: 2000, // Default scroll every 2 seconds
