@@ -217,4 +217,45 @@ impl EpubParser {
             .get_cover()
             .and_then(|(img_bytes, _)| image::load_from_memory(&img_bytes).ok())
     }
+
+    pub fn get_cover_best_effort(&mut self) -> Option<image::DynamicImage> {
+        if let Some(img) = self.get_cover() {
+            return Some(img);
+        }
+
+        // Fallback: pick the largest image that looks like a cover.
+        // Many EPUBs don't properly mark the cover in metadata.
+        let mut best: Option<(u32, image::DynamicImage)> = None;
+
+        let candidates: Vec<(std::path::PathBuf, String)> = self
+            .doc
+            .resources
+            .values()
+            .map(|r| (r.path.clone(), r.mime.clone()))
+            .collect();
+
+        for (path, mime) in candidates {
+            if !mime.starts_with("image/") {
+                continue;
+            }
+
+            let p = path.to_string_lossy().to_lowercase();
+            if !(p.contains("cover") || p.contains("front")) {
+                continue;
+            }
+
+            let Some(bytes) = self.doc.get_resource_by_path(&path) else {
+                continue;
+            };
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let score = img.width().saturating_mul(img.height());
+                match &best {
+                    Some((best_score, _)) if *best_score >= score => {}
+                    _ => best = Some((score, img)),
+                }
+            }
+        }
+
+        best.map(|(_, img)| img)
+    }
 }

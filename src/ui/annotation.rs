@@ -1,9 +1,9 @@
 use crate::app::{App, Theme};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame,
 };
 
 pub fn render_add(f: &mut Frame, app: &mut App) {
@@ -11,7 +11,7 @@ pub fn render_add(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(5)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(f.area());
 
     let help = Paragraph::new(" Type your note and press Enter to save, Esc to cancel ")
@@ -33,7 +33,7 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
-        .constraints([Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Min(0)])
         .split(f.area());
 
     let items: Vec<ListItem> = app

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{protocol::StatefulProtocol, StatefulImage};
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
@@ -77,7 +77,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(constraints.as_ref())
+            .constraints(constraints)
             .split(f.area());
 
         // Fill background
@@ -323,7 +323,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         };
 
                         if let Some(protocol) = book.image_protocols.get_mut(*protocol_idx) {
-                            let widget = StatefulImage::new(None);
+                            let widget = StatefulImage::<StatefulProtocol>::default();
                             f.render_stateful_widget(widget, full_img_area, protocol);
                         }
                     }

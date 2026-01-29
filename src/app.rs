@@ -80,7 +80,7 @@ pub struct App {
     pub selected_explorer_index: usize,
     pub is_scanning: bool,
     pub image_picker: Picker,
-    pub current_library_cover: Option<Box<dyn StatefulProtocol>>,
+    pub current_library_cover: Option<StatefulProtocol>,
     // Auto-scroll State
     pub auto_scroll_active: bool,
     pub auto_scroll_interval_ms: u64,
@@ -95,7 +95,7 @@ pub struct LoadedBook {
     pub current_line: usize,              // Cursor line
     pub viewport_top: usize,              // Viewport top line
     pub chapter_content: Vec<RenderLine>, // Lines of current chapter
-    pub image_protocols: Vec<Box<dyn StatefulProtocol>>,
+    pub image_protocols: Vec<StatefulProtocol>,
     pub word_index: usize,                        // Cursor word index
     pub selection_anchor: Option<(usize, usize)>, // (line, word)
     pub chapter_annotations: Vec<AnnotationRecord>,
@@ -108,7 +108,7 @@ impl App {
     pub fn new(db_path: &str) -> Result<Self> {
         let db = Db::new(db_path)?;
         let books = db.get_books()?;
-        Ok(Self {
+        let app = Self {
             view: AppView::Library,
             previous_view: None,
             db,
@@ -140,24 +140,36 @@ impl App {
             explorer_results: Vec::new(),
             selected_explorer_index: 0,
             is_scanning: false,
-            image_picker: {
-                let mut picker =
-                    Picker::from_termios().unwrap_or_else(|_| Picker::new((8, 16)));
-                // Default Picker protocol is Halfblocks (low-res). Guess a better protocol
-                // (Kitty/Sixel/iTerm2) so covers and inline images render sharply.
-                let _ = picker.guess_protocol();
-                picker
-            },
+            // Initialized to a reasonable default; in TUI mode this should be replaced with
+            // Picker::from_query_stdio() after entering alternate screen.
+            image_picker: Picker::halfblocks(),
             current_library_cover: None,
             auto_scroll_active: false,
             auto_scroll_interval_ms: 2000, // Default scroll every 2 seconds
             auto_scroll_last_tick: Instant::now(),
-        })
+        };
+
+        Ok(app)
     }
 
     pub fn refresh_library(&mut self) -> Result<()> {
         self.books = self.db.get_books()?;
         self.load_selected_book_preview().ok();
+        Ok(())
+    }
+
+    pub fn refresh_current_book_render_cache(&mut self) -> Result<()> {
+        let Some(ref mut book) = self.current_book else {
+            return Ok(());
+        };
+
+        let chapter_idx = book.current_chapter;
+        let content = book.parser.get_chapter_content(chapter_idx)?;
+        let (chapter_content, image_protocols) =
+            Self::flatten_content(&mut self.image_picker, content);
+
+        book.chapter_content = chapter_content;
+        book.image_protocols = image_protocols;
         Ok(())
     }
 
@@ -167,15 +179,23 @@ impl App {
             return Ok(());
         }
         let book_record = &self.books[self.selected_book_index];
-        if !book_record.path.to_lowercase().ends_with(".epub") {
+
+        if book_record.path.to_lowercase().ends_with(".epub") {
+            let mut epub = EpubParser::new(&book_record.path)?;
+            if let Some(cover) = epub.get_cover_best_effort() {
+                self.current_library_cover = Some(self.image_picker.new_resize_protocol(cover));
+            }
             return Ok(());
         }
 
-        let mut epub = EpubParser::new(&book_record.path)?;
-        if let Some(cover) = epub.get_cover() {
-            let protocol = self.image_picker.new_resize_protocol(cover);
-            self.current_library_cover = Some(protocol);
+        if book_record.path.to_lowercase().ends_with(".pdf") {
+            let pdf = PdfParser::new(&book_record.path)?;
+            if let Ok(cover) = pdf.get_cover_image() {
+                self.current_library_cover = Some(self.image_picker.new_resize_protocol(cover));
+            }
+            return Ok(());
         }
+
         Ok(())
     }
 
@@ -236,7 +256,7 @@ impl App {
     pub fn flatten_content(
         picker: &mut Picker,
         content: Vec<PageContent>,
-    ) -> (Vec<RenderLine>, Vec<Box<dyn StatefulProtocol>>) {
+    ) -> (Vec<RenderLine>, Vec<StatefulProtocol>) {
         let mut lines = Vec::new();
         let mut protocols = Vec::new();
         for item in content {
@@ -917,7 +937,7 @@ impl App {
             let count = parser.get_chapter_count();
             for i in 0..count {
                 if let Ok(content) = parser.get_chapter_content(i) {
-                    let mut dummy_picker = Picker::new((8, 16));
+                    let mut dummy_picker = Picker::halfblocks();
                     let (lines, _) = Self::flatten_content(&mut dummy_picker, content);
                     for line_item in lines.iter() {
                         if let RenderLine::Text(line) = line_item {

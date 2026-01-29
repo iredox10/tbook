@@ -40,6 +40,11 @@ impl PdfParser {
         self.page_count
     }
 
+    pub fn get_cover_image(&self) -> Result<image::DynamicImage> {
+        // Use the first page as a reasonable "cover".
+        self.render_page_image(1)
+    }
+
     pub fn get_chapter_content(&mut self, index: usize) -> Result<Vec<crate::parser::PageContent>> {
         // Use pdftotext CLI for robust and fast text extraction of a single page
         // Pages are 1-based in pdftotext

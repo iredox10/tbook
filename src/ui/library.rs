@@ -1,11 +1,11 @@
 use crate::app::{App, Theme};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    Frame,
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{protocol::StatefulProtocol, FilterType, Resize, StatefulImage};
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let (bg, fg) = match app.theme {
@@ -18,14 +18,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints(
-            [
-                Constraint::Length(3),
-                Constraint::Min(0),
-                Constraint::Length(1),
-            ]
-            .as_ref(),
-        )
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(f.area());
 
     // Fill background
@@ -89,7 +86,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let info_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(0),    // Cover area
+                Constraint::Min(6),    // Cover area (keep visible on small terminals)
                 Constraint::Length(8), // Text info area
                 Constraint::Length(3), // Progress bar
             ])
@@ -104,7 +101,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
         f.render_widget(cover_block, info_chunks[0]);
 
         if let Some(ref mut protocol) = app.current_library_cover {
-            let widget = StatefulImage::new(None);
+            // Use a higher quality resize filter so downscaled covers look less muddy.
+            let widget = StatefulImage::<StatefulProtocol>::default()
+                .resize(Resize::Fit(Some(FilterType::Lanczos3)));
             f.render_stateful_widget(widget, cover_inner, protocol);
         } else {
             let no_cover = Paragraph::new("\n\n\n[ No Cover Preview ]")
@@ -146,7 +145,15 @@ pub fn render(f: &mut Frame, app: &mut App) {
         f.render_widget(gauge, info_chunks[2]);
     }
 
-    let help = Paragraph::new(" [Enter] Open | [n] Add New | [S] Search | [?] Help | [q] Quit ")
-        .style(Style::default().fg(fg).bg(bg));
+    let proto = format!(
+        "proto={:?} font={:?}  ([p] cycle proto)",
+        app.image_picker.protocol_type(),
+        app.image_picker.font_size()
+    );
+    let help = Paragraph::new(format!(
+        " [Enter] Open | [n] Add New | [S] Search | [?] Help | [p] Proto | [q] Quit  |  {} ",
+        proto
+    ))
+    .style(Style::default().fg(fg).bg(bg));
     f.render_widget(help, chunks[2]);
 }

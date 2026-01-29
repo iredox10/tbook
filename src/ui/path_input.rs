@@ -1,9 +1,9 @@
 use crate::app::{App, Theme};
 use ratatui::{
-    Frame,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
+    Frame,
 };
 
 pub fn render(f: &mut Frame, app: &mut App) {
@@ -17,7 +17,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(5)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(f.area());
 
     // Fill background

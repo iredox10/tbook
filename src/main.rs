@@ -13,6 +13,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::Picker;
 use std::{io, time::Duration};
 
 #[tokio::main]
@@ -48,6 +49,11 @@ async fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Query terminal capabilities (protocol + pixel cell size) after entering alt screen.
+    // This improves Kitty/Ghostty image sharpness vs guessing.
+    app.image_picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    app.load_selected_book_preview().ok();
 
     let res = run_app(&mut terminal, app).await;
 
@@ -159,6 +165,13 @@ async fn run_app<B: ratatui::backend::Backend>(
                     }
                     AppView::Library => match key.code {
                         KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('p') => {
+                            // Cycle image protocols to debug cover rendering across terminals.
+                            let next = app.image_picker.protocol_type().next();
+                            app.image_picker.set_protocol_type(next);
+                            app.load_selected_book_preview().ok();
+                            app.refresh_current_book_render_cache().ok();
+                        }
                         KeyCode::Char('n') => {
                             app.explorer_path = dirs::home_dir()
                                 .unwrap_or_else(|| ".".into())
