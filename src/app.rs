@@ -6,7 +6,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 #[derive(Clone)]
@@ -42,6 +42,119 @@ pub enum Theme {
     Gruvbox,
     Nord,
     Sepia,
+}
+
+pub struct PomodoroState {
+    pub running: bool,
+    pub is_break: bool,
+    pub remaining: Duration,
+    pub work_duration: Duration,
+    pub break_duration: Duration,
+    pub end_time: Option<Instant>,
+}
+
+impl PomodoroState {
+    pub fn new(work_duration: Duration, break_duration: Duration) -> Self {
+        Self {
+            running: false,
+            is_break: false,
+            remaining: work_duration,
+            work_duration,
+            break_duration,
+            end_time: None,
+        }
+    }
+
+    pub fn set_durations(&mut self, work_duration: Duration, break_duration: Duration) {
+        self.work_duration = work_duration;
+        self.break_duration = break_duration;
+        if !self.running {
+            self.remaining = if self.is_break {
+                self.break_duration
+            } else {
+                self.work_duration
+            };
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        if self.running {
+            self.pause();
+        } else {
+            self.start();
+        }
+    }
+
+    pub fn start(&mut self) {
+        if self.remaining.is_zero() {
+            self.remaining = if self.is_break {
+                self.break_duration
+            } else {
+                self.work_duration
+            };
+        }
+        self.end_time = Some(Instant::now() + self.remaining);
+        self.running = true;
+    }
+
+    pub fn pause(&mut self) {
+        if let Some(end_time) = self.end_time {
+            let now = Instant::now();
+            self.remaining = if end_time > now {
+                end_time - now
+            } else {
+                Duration::from_secs(0)
+            };
+        }
+        self.end_time = None;
+        self.running = false;
+    }
+
+    pub fn reset(&mut self) {
+        self.running = false;
+        self.is_break = false;
+        self.remaining = self.work_duration;
+        self.end_time = None;
+    }
+
+    pub fn skip_break(&mut self) {
+        self.is_break = false;
+        self.remaining = self.work_duration;
+        if self.running {
+            self.end_time = Some(Instant::now() + self.remaining);
+        }
+    }
+
+    pub fn tick(&mut self) {
+        if !self.running {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(end_time) = self.end_time {
+            if now >= end_time {
+                self.is_break = !self.is_break;
+                self.remaining = if self.is_break {
+                    self.break_duration
+                } else {
+                    self.work_duration
+                };
+                self.end_time = Some(now + self.remaining);
+            }
+        }
+    }
+
+    pub fn remaining_time(&self) -> Duration {
+        if self.running {
+            if let Some(end_time) = self.end_time {
+                let now = Instant::now();
+                if end_time > now {
+                    return end_time - now;
+                }
+                return Duration::from_secs(0);
+            }
+        }
+        self.remaining
+    }
 }
 
 impl Theme {
@@ -140,6 +253,8 @@ pub struct App {
     pub margin: u16,
     pub line_spacing: u16,
     pub daily_goal_words: usize,
+    pub focus_mode: bool,
+    pub pomodoro: PomodoroState,
     // Global Search State
     pub global_search_query: String,
     pub global_search_results: Vec<(i32, String, usize, String)>,
@@ -222,6 +337,8 @@ impl App {
             margin: 2,
             line_spacing: 0,
             daily_goal_words: 1500,
+            focus_mode: false,
+            pomodoro: PomodoroState::new(Duration::from_secs(1500), Duration::from_secs(300)),
             global_search_query: String::new(),
             global_search_results: Vec::new(),
             selected_search_index: 0,
@@ -254,6 +371,43 @@ impl App {
         if self.explorer_path.is_empty() {
             self.explorer_path = config.library_path.clone();
         }
+
+        let work = Duration::from_secs(config.pomodoro_work_minutes.saturating_mul(60));
+        let rest = Duration::from_secs(config.pomodoro_break_minutes.saturating_mul(60));
+        self.pomodoro
+            .set_durations(work.max(Duration::from_secs(60)), rest.max(Duration::from_secs(60)));
+    }
+
+    pub fn toggle_focus_mode(&mut self) {
+        self.focus_mode = !self.focus_mode;
+    }
+
+    pub fn pomodoro_toggle(&mut self) {
+        self.pomodoro.toggle();
+    }
+
+    pub fn pomodoro_reset(&mut self) {
+        self.pomodoro.reset();
+    }
+
+    pub fn pomodoro_skip_break(&mut self) {
+        self.pomodoro.skip_break();
+    }
+
+    pub fn tick_timers(&mut self) {
+        self.pomodoro.tick();
+    }
+
+    pub fn pomodoro_label(&self) -> Option<String> {
+        if !self.pomodoro.running && !self.focus_mode {
+            return None;
+        }
+        let remaining = self.pomodoro.remaining_time();
+        let mins = remaining.as_secs() / 60;
+        let secs = remaining.as_secs() % 60;
+        let phase = if self.pomodoro.is_break { "Break" } else { "Focus" };
+        let status = if self.pomodoro.running { "" } else { " (paused)" };
+        Some(format!("{} {:02}:{:02}{}", phase, mins, secs, status))
     }
 
     pub fn refresh_library(&mut self) -> Result<()> {

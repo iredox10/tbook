@@ -48,6 +48,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // Call these before mutably borrowing book
     let selection = app.get_selection_range();
     let (_, wpm) = app.get_reading_stats();
+    let pomodoro_label = app.pomodoro_label();
+    let pomodoro_running = app.pomodoro.running;
+    let focus_mode = app.focus_mode;
+    let view = app.view;
+    let margin = app.margin;
+    let line_spacing = app.line_spacing;
 
     if let Some(ref mut book) = app.current_book {
         let (bg, fg) = match app.theme {
@@ -57,23 +63,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
             Theme::Sepia => (Color::Rgb(250, 240, 230), Color::Rgb(93, 71, 139)),
         };
 
-        let is_search = matches!(app.view, crate::app::AppView::Search);
+        let is_search = matches!(view, crate::app::AppView::Search);
+        let show_top = !focus_mode;
+        let show_status = !focus_mode || pomodoro_running;
 
-        let constraints = if is_search {
-            [
-                Constraint::Length(1), // Top bar
-                Constraint::Min(0),    // Content
-                Constraint::Length(3), // Search bar
-                Constraint::Length(1), // Status bar
-            ]
-        } else {
-            [
-                Constraint::Length(1), // Top bar
-                Constraint::Min(0),    // Content
-                Constraint::Length(0), // No search
-                Constraint::Length(1), // Status bar
-            ]
-        };
+        let constraints = [
+            Constraint::Length(if show_top { 1 } else { 0 }),
+            Constraint::Min(0),
+            Constraint::Length(if is_search { 3 } else { 0 }),
+            Constraint::Length(if show_status { 1 } else { 0 }),
+        ];
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -84,39 +83,41 @@ pub fn render(f: &mut Frame, app: &mut App) {
         f.render_widget(Block::default().style(Style::default().bg(bg)), f.area());
 
         // 1. Render Top Bar with Buttons
-        let top_bar_style = Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::White);
-        let top_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(15), // Buttons area
-            ])
-            .split(chunks[0]);
+        if show_top {
+            let top_bar_style = Style::default().bg(Color::Rgb(50, 50, 50)).fg(Color::White);
+            let top_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(15), // Buttons area
+                ])
+                .split(chunks[0]);
 
-        let title_text = format!(" Reading: {}", book.path);
-        f.render_widget(
-            Paragraph::new(title_text).style(top_bar_style),
-            top_chunks[0],
-        );
+            let title_text = format!(" Reading: {}", book.path);
+            f.render_widget(
+                Paragraph::new(title_text).style(top_bar_style),
+                top_chunks[0],
+            );
 
-        // Buttons for mouse click detection
-        let buttons = Line::from(vec![
-            Span::styled(
-                " [ - ] ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " [ + ] ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]);
-        f.render_widget(Paragraph::new(buttons).style(top_bar_style), top_chunks[1]);
+            // Buttons for mouse click detection
+            let buttons = Line::from(vec![
+                Span::styled(
+                    " [ - ] ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " [ + ] ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]);
+            f.render_widget(Paragraph::new(buttons).style(top_bar_style), top_chunks[1]);
+        }
 
         let _viewport_height = chunks[1].height as usize;
         let area = Layout::default()
-            .margin(app.margin)
+            .margin(margin)
             .constraints([Constraint::Percentage(100)])
             .split(chunks[1])[0];
 
@@ -125,7 +126,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         // When the terminal is narrow, render each paragraph as wrapped visual lines.
         // This avoids hard-cutting long lines and keeps text responsive.
         // We intentionally disable wrapping in Select/Visual so word indices map 1:1.
-        let wrap_text = matches!(app.view, AppView::Reader | AppView::Search | AppView::Rsvp);
+        let wrap_text = matches!(view, AppView::Reader | AppView::Search | AppView::Rsvp);
 
         let annotation_bg = |kind: &str| match AnnotationKind::from_str(kind) {
             AnnotationKind::Highlight => Color::Rgb(80, 60, 40),
@@ -284,7 +285,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                             Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
                             line_area,
                         );
-                        y = y.saturating_add(1 + app.line_spacing);
+                        y = y.saturating_add(1 + line_spacing);
                     }
 
                     // We intentionally don't update selection/cursor highlighting here;
@@ -346,21 +347,47 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
 
         // Status bar
-        let mode_str = match app.view {
-            AppView::Visual => " VISUAL ",
-            AppView::Select => " SELECT ",
-            _ => " NORMAL ",
-        };
-        let progress = format!(
-            "{}| Ch: {}/{} | L: {} | WPM: {:.0} | 's' select | 't' toc | 'A' notes | 'q' lib ",
-            mode_str,
-            book.current_chapter + 1,
-            book.parser.get_chapter_count(),
-            book.current_line,
-            wpm
-        );
-        let status =
-            Paragraph::new(progress).style(Style::default().bg(Color::Blue).fg(Color::White));
-        f.render_widget(status, chunks[3]);
+        if show_status {
+            let mode_str = match view {
+                AppView::Visual => " VISUAL ",
+                AppView::Select => " SELECT ",
+                _ => " NORMAL ",
+            };
+            let pomodoro = pomodoro_label.clone().unwrap_or_default();
+            let status_text = if focus_mode {
+                if pomodoro.is_empty() {
+                    format!(
+                        " FOCUS | Ch {} | L {} ",
+                        book.current_chapter + 1,
+                        book.current_line
+                    )
+                } else {
+                    format!(
+                        " FOCUS | {} | Ch {} | L {} ",
+                        pomodoro,
+                        book.current_chapter + 1,
+                        book.current_line
+                    )
+                }
+            } else {
+                let pomodoro_section = if pomodoro.is_empty() {
+                    String::new()
+                } else {
+                    format!(" | {}", pomodoro)
+                };
+                format!(
+                    "{}| Ch: {}/{} | L: {} | WPM: {:.0}{} | 's' select | 't' toc | 'A' notes | 'q' lib ",
+                    mode_str,
+                    book.current_chapter + 1,
+                    book.parser.get_chapter_count(),
+                    book.current_line,
+                    wpm,
+                    pomodoro_section
+                )
+            };
+            let status = Paragraph::new(status_text)
+                .style(Style::default().bg(Color::Blue).fg(Color::White));
+            f.render_widget(status, chunks[3]);
+        }
     }
 }

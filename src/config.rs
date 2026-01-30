@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub line_spacing: u16,
     pub auto_resume: bool,
     pub daily_goal_words: usize,
+    pub pomodoro_work_minutes: u64,
+    pub pomodoro_break_minutes: u64,
 }
 
 impl Default for AppConfig {
@@ -24,6 +26,8 @@ impl Default for AppConfig {
             line_spacing: 0,
             auto_resume: true,
             daily_goal_words: 1500,
+            pomodoro_work_minutes: 25,
+            pomodoro_break_minutes: 5,
         }
     }
 }

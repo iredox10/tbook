@@ -107,9 +107,15 @@ fn build_image_picker() -> Picker {
     picker
 }
 
-fn reader_content_height(term_height: u16, margin: u16, view: AppView) -> usize {
-    let top_bar = 1u16;
-    let status_bar = 1u16;
+fn reader_content_height(
+    term_height: u16,
+    margin: u16,
+    view: AppView,
+    focus_mode: bool,
+    show_status: bool,
+) -> usize {
+    let top_bar = if focus_mode { 0u16 } else { 1u16 };
+    let status_bar = if show_status { 1u16 } else { 0u16 };
     let search_bar = if matches!(view, AppView::Search) { 3u16 } else { 0u16 };
     let content = term_height.saturating_sub(top_bar + status_bar + search_bar);
     let content = content.saturating_sub(margin.saturating_mul(2));
@@ -187,7 +193,15 @@ async fn run_app<B: ratatui::backend::Backend>(
             .size()
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let viewport_height = (term_size.height as usize).saturating_sub(1);
-        let reader_height = reader_content_height(term_size.height, app.margin, app.view).max(1);
+        let show_status = !app.focus_mode || app.pomodoro.running;
+        let reader_height = reader_content_height(
+            term_size.height,
+            app.margin,
+            app.view,
+            app.focus_mode,
+            show_status,
+        )
+        .max(1);
 
         terminal
             .draw(|f| ui::render(f, &mut app))
@@ -214,6 +228,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                     .insert(app.explorer_results[0].clone());
             }
         }
+
+        app.tick_timers();
 
         // Auto-scroll logic
         if app.view == AppView::Reader && app.auto_scroll_active {
@@ -528,6 +544,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 Duration::from_millis(0),
                             );
                         }
+                        KeyCode::Char('f') => app.toggle_focus_mode(),
+                        KeyCode::Char('p') => app.pomodoro_toggle(),
+                        KeyCode::Char('R') => app.pomodoro_reset(),
+                        KeyCode::Char('B') => app.pomodoro_skip_break(),
                         KeyCode::Char('s') => app.view = AppView::Select,
                         KeyCode::Char('A') => {
                             let _ = app.load_annotations();
@@ -614,6 +634,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                         }
+                        KeyCode::Char('f') => app.toggle_focus_mode(),
+                        KeyCode::Char('p') => app.pomodoro_toggle(),
+                        KeyCode::Char('R') => app.pomodoro_reset(),
+                        KeyCode::Char('B') => app.pomodoro_skip_break(),
                         KeyCode::Down | KeyCode::Char('j') => app.move_cursor_down(reader_height),
                         KeyCode::Up | KeyCode::Char('k') => app.move_cursor_up(),
                         KeyCode::Char('w') => app.cursor_right(reader_height),
