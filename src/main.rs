@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let config = AppConfig::load().unwrap_or_default();
     let mut app = App::new("tbook.db")?;
+    app.apply_config(&config);
 
     if args.len() > 2 && args[1] == "add" {
         let path = &args[2];
@@ -576,8 +577,18 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.view = AppView::Annotation;
                         }
                         KeyCode::Char('h') => {
-                            if app.view == AppView::Visual {
+                            if app.view == AppView::Visual || app.view == AppView::Select {
                                 let _ = app.add_quick_highlight();
+                            }
+                        }
+                        KeyCode::Char('q') => {
+                            if app.view == AppView::Visual || app.view == AppView::Select {
+                                let _ = app.add_question_highlight();
+                            }
+                        }
+                        KeyCode::Char('m') => {
+                            if app.view == AppView::Visual || app.view == AppView::Select {
+                                let _ = app.add_summary_highlight();
                             }
                         }
                         KeyCode::Char('d') => {
@@ -651,6 +662,16 @@ async fn run_app<B: ratatui::backend::Backend>(
                     },
                     AppView::AnnotationList => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => app.view = AppView::Reader,
+                        KeyCode::Char('1') => app.set_annotation_filter(app::AnnotationFilter::All),
+                        KeyCode::Char('2') => {
+                            app.set_annotation_filter(app::AnnotationFilter::Highlight)
+                        }
+                        KeyCode::Char('3') => {
+                            app.set_annotation_filter(app::AnnotationFilter::Question)
+                        }
+                        KeyCode::Char('4') => {
+                            app.set_annotation_filter(app::AnnotationFilter::Summary)
+                        }
                         KeyCode::Down | KeyCode::Char('j') => {
                             if !app.current_annotations.is_empty() {
                                 app.selected_annotation_index = (app.selected_annotation_index + 1)

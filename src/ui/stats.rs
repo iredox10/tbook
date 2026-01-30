@@ -1,9 +1,9 @@
 use crate::app::{App, Theme};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{BarChart, Block, Borders, Paragraph},
+    widgets::{BarChart, Block, Borders, Gauge, Paragraph},
+    Frame,
 };
 
 pub fn render(f: &mut Frame, app: &mut App) {
@@ -18,6 +18,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .margin(2)
         .constraints([
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(3),
@@ -36,6 +37,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
         );
     f.render_widget(title, chunks[0]);
 
+    let today_words = app.db.get_today_words().unwrap_or(0);
+    let goal = app.daily_goal_words.max(1);
+    let ratio = (today_words as f64 / goal as f64).min(1.0);
+    let percent = (ratio * 100.0).round() as u16;
+
+    let goal_label = format!(" Today: {} / {} words ({}%) ", today_words, goal, percent);
+    let goal_gauge = Gauge::default()
+        .block(Block::default().title(" Daily Goal ").borders(Borders::ALL))
+        .gauge_style(Style::default().fg(Color::Green))
+        .label(goal_label)
+        .ratio(ratio);
+    f.render_widget(goal_gauge, chunks[1]);
+
     if let Ok(stats) = app.db.get_weekly_stats() {
         let data: Vec<(&str, u64)> = stats.iter().map(|(d, w)| (d.as_str(), *w as u64)).collect();
 
@@ -51,13 +65,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .bar_style(Style::default().fg(Color::Green))
             .value_style(Style::default().fg(Color::Black).bg(Color::Green));
 
-        f.render_widget(barchart, chunks[1]);
+        f.render_widget(barchart, chunks[2]);
     } else {
         let error = Paragraph::new("No statistics available yet. Start reading!")
             .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(error, chunks[1]);
+        f.render_widget(error, chunks[2]);
     }
 
     let footer = Paragraph::new(" [q] Back to Library ").style(Style::default().fg(fg).bg(bg));
-    f.render_widget(footer, chunks[2]);
+    f.render_widget(footer, chunks[3]);
 }

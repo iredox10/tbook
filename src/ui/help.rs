@@ -1,9 +1,9 @@
 use crate::app::App;
 use ratatui::{
-    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{Block, Borders, Clear, Paragraph},
+    Frame,
 };
 
 pub fn render(f: &mut Frame, _app: &App) {
@@ -28,14 +28,21 @@ pub fn render(f: &mut Frame, _app: &App) {
         "A : View All Notes",
         "V : View Vocabulary",
         "E : Export to Markdown",
+        "--- NOTES LIST ---",
+        "1/2/3/4 : Filter Notes",
         "--- SELECT MODE ---",
         "j/k : Move Cursor",
         "w/b : Move by Word",
         "v : Start Visual Selection",
+        "h : Highlight",
+        "q : Question Highlight",
+        "m : Summary Highlight",
         "d : Dictionary Lookup",
         "--- VISUAL MODE ---",
-        "h : Quick Highlight (Gold)",
-        "a : Highlight + Note (Green)",
+        "h : Highlight",
+        "q : Question Highlight",
+        "m : Summary Highlight",
+        "a : Highlight + Note",
     ];
 
     let p = Paragraph::new(help_text.join("\n"))

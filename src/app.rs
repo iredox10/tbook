@@ -44,6 +44,69 @@ pub enum Theme {
     Sepia,
 }
 
+impl Theme {
+    pub fn from_str(value: &str) -> Theme {
+        match value.to_lowercase().as_str() {
+            "gruvbox" => Theme::Gruvbox,
+            "nord" => Theme::Nord,
+            "sepia" => Theme::Sepia,
+            _ => Theme::Default,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationKind {
+    Highlight,
+    Question,
+    Summary,
+}
+
+impl AnnotationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnnotationKind::Highlight => "highlight",
+            AnnotationKind::Question => "question",
+            AnnotationKind::Summary => "summary",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            AnnotationKind::Highlight => "H",
+            AnnotationKind::Question => "Q",
+            AnnotationKind::Summary => "S",
+        }
+    }
+
+    pub fn from_str(value: &str) -> AnnotationKind {
+        match value {
+            "question" => AnnotationKind::Question,
+            "summary" => AnnotationKind::Summary,
+            _ => AnnotationKind::Highlight,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationFilter {
+    All,
+    Highlight,
+    Question,
+    Summary,
+}
+
+impl AnnotationFilter {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AnnotationFilter::All => "All",
+            AnnotationFilter::Highlight => "Highlights",
+            AnnotationFilter::Question => "Questions",
+            AnnotationFilter::Summary => "Summaries",
+        }
+    }
+}
+
 pub struct App {
     pub view: AppView,
     pub previous_view: Option<AppView>,
@@ -63,8 +126,10 @@ pub struct App {
     pub rsvp_words: Vec<String>,
     // Annotation State
     pub annotation_note: String,
+    pub all_annotations: Vec<AnnotationRecord>,
     pub current_annotations: Vec<AnnotationRecord>,
     pub selected_annotation_index: usize,
+    pub annotation_filter: AnnotationFilter,
     // Dictionary State
     pub dictionary_query: String,
     pub dictionary_result: String,
@@ -74,6 +139,7 @@ pub struct App {
     // Layout State
     pub margin: u16,
     pub line_spacing: u16,
+    pub daily_goal_words: usize,
     // Global Search State
     pub global_search_query: String,
     pub global_search_results: Vec<(i32, String, usize, String)>,
@@ -145,14 +211,17 @@ impl App {
             rsvp_wpm: 300,
             rsvp_words: Vec::new(),
             annotation_note: String::new(),
+            all_annotations: Vec::new(),
             current_annotations: Vec::new(),
             selected_annotation_index: 0,
+            annotation_filter: AnnotationFilter::All,
             dictionary_query: String::new(),
             dictionary_result: String::new(),
             vocabulary: Vec::new(),
             selected_vocab_index: 0,
             margin: 2,
             line_spacing: 0,
+            daily_goal_words: 1500,
             global_search_query: String::new(),
             global_search_results: Vec::new(),
             selected_search_index: 0,
@@ -175,6 +244,16 @@ impl App {
         };
 
         Ok(app)
+    }
+
+    pub fn apply_config(&mut self, config: &crate::config::AppConfig) {
+        self.margin = config.margin;
+        self.line_spacing = config.line_spacing;
+        self.daily_goal_words = config.daily_goal_words;
+        self.theme = Theme::from_str(&config.theme);
+        if self.explorer_path.is_empty() {
+            self.explorer_path = config.library_path.clone();
+        }
     }
 
     pub fn refresh_library(&mut self) -> Result<()> {
@@ -855,6 +934,7 @@ impl App {
                         ew,
                         &content,
                         note,
+                        AnnotationKind::Summary.as_str(),
                     )?;
                     book.chapter_annotations = self
                         .db
@@ -872,6 +952,18 @@ impl App {
     }
 
     pub fn add_quick_highlight(&mut self) -> Result<()> {
+        self.add_quick_highlight_kind(AnnotationKind::Highlight)
+    }
+
+    pub fn add_question_highlight(&mut self) -> Result<()> {
+        self.add_quick_highlight_kind(AnnotationKind::Question)
+    }
+
+    pub fn add_summary_highlight(&mut self) -> Result<()> {
+        self.add_quick_highlight_kind(AnnotationKind::Summary)
+    }
+
+    fn add_quick_highlight_kind(&mut self, kind: AnnotationKind) -> Result<()> {
         let range = self.get_selection_range();
         let selected_text = if range.is_some() {
             self.get_selected_text()
@@ -892,6 +984,7 @@ impl App {
                         ew,
                         &selected_text,
                         None,
+                        kind.as_str(),
                     )?;
                 }
             } else {
@@ -910,6 +1003,7 @@ impl App {
                                 book.word_index,
                                 word,
                                 None,
+                                kind.as_str(),
                             )?;
                         }
                     }
@@ -930,11 +1024,43 @@ impl App {
 
     pub fn load_annotations(&mut self) -> Result<()> {
         if let Some(ref book) = self.current_book {
-            self.current_annotations = self.db.get_annotations(book.id)?;
-            self.selected_annotation_index = 0;
+            self.all_annotations = self.db.get_annotations(book.id)?;
+            self.apply_annotation_filter();
             self.view = AppView::AnnotationList;
         }
         Ok(())
+    }
+
+    pub fn set_annotation_filter(&mut self, filter: AnnotationFilter) {
+        self.annotation_filter = filter;
+        self.apply_annotation_filter();
+    }
+
+    fn apply_annotation_filter(&mut self) {
+        let filtered: Vec<AnnotationRecord> = match self.annotation_filter {
+            AnnotationFilter::All => self.all_annotations.clone(),
+            AnnotationFilter::Highlight => self
+                .all_annotations
+                .iter()
+                .filter(|a| AnnotationKind::from_str(&a.kind) == AnnotationKind::Highlight)
+                .cloned()
+                .collect(),
+            AnnotationFilter::Question => self
+                .all_annotations
+                .iter()
+                .filter(|a| AnnotationKind::from_str(&a.kind) == AnnotationKind::Question)
+                .cloned()
+                .collect(),
+            AnnotationFilter::Summary => self
+                .all_annotations
+                .iter()
+                .filter(|a| AnnotationKind::from_str(&a.kind) == AnnotationKind::Summary)
+                .cloned()
+                .collect(),
+        };
+
+        self.current_annotations = filtered;
+        self.selected_annotation_index = 0;
     }
 
     pub fn jump_to_annotation(&mut self) -> Result<()> {

@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub margin: u16,
     pub line_spacing: u16,
     pub auto_resume: bool,
+    pub daily_goal_words: usize,
 }
 
 impl Default for AppConfig {
@@ -22,6 +23,7 @@ impl Default for AppConfig {
             margin: 2,
             line_spacing: 0,
             auto_resume: true,
+            daily_goal_words: 1500,
         }
     }
 }

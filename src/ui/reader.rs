@@ -1,4 +1,4 @@
-use crate::app::{App, AppView, RenderLine, Theme};
+use crate::app::{AnnotationKind, App, AppView, RenderLine, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -127,6 +127,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         // We intentionally disable wrapping in Select/Visual so word indices map 1:1.
         let wrap_text = matches!(app.view, AppView::Reader | AppView::Search | AppView::Rsvp);
 
+        let annotation_bg = |kind: &str| match AnnotationKind::from_str(kind) {
+            AnnotationKind::Highlight => Color::Rgb(80, 60, 40),
+            AnnotationKind::Question => Color::Rgb(40, 60, 120),
+            AnnotationKind::Summary => Color::Rgb(40, 80, 40),
+        };
+
         let mut y = area.y;
         let mut logical_i = book.viewport_top;
         while y < area.y.saturating_add(area.height) && logical_i < book.chapter_content.len() {
@@ -181,11 +187,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                                 };
 
                                 if is_in_anno {
-                                    style = if anno.note.is_some() {
-                                        style.bg(Color::Rgb(40, 80, 40))
-                                    } else {
-                                        style.bg(Color::Rgb(80, 60, 40))
-                                    };
+                                    style = style.bg(annotation_bg(&anno.kind));
                                     break;
                                 }
                             }
@@ -270,11 +272,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                                 };
 
                                 if is_in_anno {
-                                    style = if anno.note.is_some() {
-                                        style.bg(Color::Rgb(40, 80, 40))
-                                    } else {
-                                        style.bg(Color::Rgb(80, 60, 40))
-                                    };
+                                    style = style.bg(annotation_bg(&anno.kind));
                                     break;
                                 }
                             }

@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 use std::path::Path;
 
 pub struct Db {
@@ -40,11 +40,14 @@ impl Db {
                 end_word INTEGER NOT NULL,
                 content TEXT NOT NULL,
                 note TEXT,
+                kind TEXT DEFAULT 'highlight',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(book_id) REFERENCES books(id)
             )",
             [],
         )?;
+
+        ensure_annotation_kind_column(conn)?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS vocabulary (
@@ -93,6 +96,15 @@ impl Db {
         }
         stats.reverse();
         Ok(stats)
+    }
+
+    pub fn get_today_words(&self) -> Result<usize> {
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COALESCE(SUM(words_read), 0) FROM reading_sessions WHERE date = ?1")?;
+        let count: i32 = stmt.query_row(params![date], |row| row.get(0))?;
+        Ok(count as usize)
     }
 
     pub fn add_book(
@@ -162,9 +174,10 @@ impl Db {
         end_word: usize,
         content: &str,
         note: Option<&str>,
+        kind: &str,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO annotations (book_id, chapter, start_line, start_word, end_line, end_word, content, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO annotations (book_id, chapter, start_line, start_word, end_line, end_word, content, note, kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 book_id,
                 chapter as i32,
@@ -173,14 +186,17 @@ impl Db {
                 end_line as i32,
                 end_word as i32,
                 content,
-                note
+                note,
+                kind
             ],
         )?;
         Ok(())
     }
 
     pub fn get_annotations(&self, book_id: i32) -> Result<Vec<AnnotationRecord>> {
-        let mut stmt = self.conn.prepare("SELECT id, chapter, start_line, start_word, end_line, end_word, content, note FROM annotations WHERE book_id = ?1 ORDER BY chapter, start_line, start_word")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chapter, start_line, start_word, end_line, end_word, content, note, COALESCE(kind, 'highlight') FROM annotations WHERE book_id = ?1 ORDER BY chapter, start_line, start_word",
+        )?;
         let anno_iter = stmt.query_map(params![book_id], |row| {
             Ok(AnnotationRecord {
                 id: row.get(0)?,
@@ -191,6 +207,7 @@ impl Db {
                 end_word: row.get::<_, i32>(5)? as usize,
                 content: row.get(6)?,
                 note: row.get(7)?,
+                kind: row.get(8)?,
             })
         })?;
 
@@ -256,6 +273,28 @@ pub struct AnnotationRecord {
     pub end_word: usize,
     pub content: String,
     pub note: Option<String>,
+    pub kind: String,
+}
+
+fn ensure_annotation_kind_column(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(annotations)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut has_kind = false;
+    for column in columns {
+        if column? == "kind" {
+            has_kind = true;
+            break;
+        }
+    }
+
+    if !has_kind {
+        conn.execute(
+            "ALTER TABLE annotations ADD COLUMN kind TEXT DEFAULT 'highlight'",
+            [],
+        )?;
+    }
+
+    Ok(())
 }
 
 pub struct VocabRecord {

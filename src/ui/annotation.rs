@@ -1,4 +1,4 @@
-use crate::app::{App, Theme};
+use crate::app::{AnnotationKind, App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -33,8 +33,14 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
-        .constraints([Constraint::Min(0)])
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(f.area());
+
+    let kind_color = |kind: &str| match AnnotationKind::from_str(kind) {
+        AnnotationKind::Highlight => Color::Rgb(200, 170, 80),
+        AnnotationKind::Question => Color::Rgb(120, 160, 220),
+        AnnotationKind::Summary => Color::Rgb(140, 200, 140),
+    };
 
     let items: Vec<ListItem> = app
         .current_annotations
@@ -46,11 +52,13 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(fg).bg(bg)
+                Style::default().fg(kind_color(&a.kind)).bg(bg)
             };
             let note = a.note.as_deref().unwrap_or("No note");
+            let kind = AnnotationKind::from_str(&a.kind).label();
             ListItem::new(format!(
-                "Ch {}: {}... [{}]",
+                "{} Ch {}: {}... [{}]",
+                kind,
                 a.chapter + 1,
                 &a.content[..std::cmp::min(20, a.content.len())],
                 note
@@ -62,7 +70,7 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Annotations (Enter to Jump, Esc to Back) ")
+                .title(format!(" Annotations ({}) ", app.annotation_filter.label()))
                 .borders(Borders::ALL)
                 .style(Style::default().fg(fg).bg(bg)),
         )
@@ -73,6 +81,12 @@ pub fn render_list(f: &mut Frame, app: &mut App) {
         list_state.select(Some(app.selected_annotation_index));
     }
     f.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    let footer = Paragraph::new(
+        " [1] All | [2] Highlights | [3] Questions | [4] Summaries | [Enter] Jump | [Esc] Back ",
+    )
+    .style(Style::default().fg(fg).bg(bg));
+    f.render_widget(footer, chunks[1]);
 }
 
 fn get_theme_colors(theme: Theme) -> (Color, Color) {
