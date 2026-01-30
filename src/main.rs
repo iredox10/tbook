@@ -106,6 +106,15 @@ fn build_image_picker() -> Picker {
     picker
 }
 
+fn reader_content_height(term_height: u16, margin: u16, view: AppView) -> usize {
+    let top_bar = 1u16;
+    let status_bar = 1u16;
+    let search_bar = if matches!(view, AppView::Search) { 3u16 } else { 0u16 };
+    let content = term_height.saturating_sub(top_bar + status_bar + search_bar);
+    let content = content.saturating_sub(margin.saturating_mul(2));
+    content as usize
+}
+
 fn schedule_cover_request(
     app: &mut App,
     pending_cover_request: &mut Option<app::CoverRequest>,
@@ -177,6 +186,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             .size()
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let viewport_height = (term_size.height as usize).saturating_sub(1);
+        let reader_height = reader_content_height(term_size.height, app.margin, app.view).max(1);
 
         terminal
             .draw(|f| ui::render(f, &mut app))
@@ -593,9 +603,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 }
                             }
                         }
-                        KeyCode::Down | KeyCode::Char('j') => app.move_cursor_down(viewport_height),
+                        KeyCode::Down | KeyCode::Char('j') => app.move_cursor_down(reader_height),
                         KeyCode::Up | KeyCode::Char('k') => app.move_cursor_up(),
-                        KeyCode::Char('w') => app.cursor_right(viewport_height),
+                        KeyCode::Char('w') => app.cursor_right(reader_height),
                         KeyCode::Char('b') => app.cursor_left(),
                         KeyCode::Esc => {
                             if app.view == AppView::Visual {
