@@ -16,10 +16,17 @@ A feature-rich **Terminal User Interface (TUI) E-book Reader** written in Rust. 
 
 ## 🚀 Installation
 
+### Linux (Recommended)
+```bash
+curl -fsSL https://raw.githubusercontent.com/iredox/tbook/main/scripts/install.sh | bash
+```
+
 ### Using Cargo (Recommended)
 ```bash
 cargo install tbook
 ```
+
+Note: PDF support needs `pdftotext` and `pdftoppm` (poppler-utils). The Linux install script installs them automatically.
 
 ### Using NPM
 ```bash
@@ -61,7 +68,9 @@ make
 
 ## 🛠️ Requirements
 - **Rust/Cargo**: To build and run.
-- **poppler-utils**: Required for fast PDF text extraction (`pdftotext`).
+- **poppler-utils**: Required for fast PDF text extraction (`pdftotext`) and PDF rendering (`pdftoppm`).
+- **Bundled binaries**: Linux release bundles poppler tools; tbook will use bundled binaries if found next to the executable.
+- **Overrides**: You can set `TBOOK_PDFTOTEXT` / `TBOOK_PDFTOPPM` to custom paths.
 - **Modern Terminal**: Kitty, WezTerm, Ghostty, or iTerm2 for high-quality image support.
 
 ## 📄 License

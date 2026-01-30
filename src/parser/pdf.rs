@@ -1,8 +1,8 @@
+use crate::deps;
 use anyhow::{Context, Result};
 use pdf::file::FileOptions;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 pub struct PdfParser {
     path: String,
@@ -50,7 +50,9 @@ impl PdfParser {
         // Pages are 1-based in pdftotext
         let page_num = index + 1;
 
-        let output = Command::new("pdftotext")
+        let mut cmd = deps::resolve_poppler_command("pdftotext")
+            .context("Failed to locate pdftotext. Bundle or install poppler-utils.")?;
+        let output = cmd
             .args(&[
                 "-f",
                 &page_num.to_string(),
@@ -103,7 +105,9 @@ impl PdfParser {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("temp path not valid utf-8"))?;
 
-        let output = Command::new("pdftoppm")
+        let mut cmd = deps::resolve_poppler_command("pdftoppm")
+            .context("Failed to locate pdftoppm. Bundle or install poppler-utils.")?;
+        let output = cmd
             .args(&[
                 "-f",
                 &page_num.to_string(),

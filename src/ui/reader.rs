@@ -123,10 +123,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         let mut rendered_protocols = HashSet::new();
 
-        // When the terminal is narrow, render each paragraph as wrapped visual lines.
-        // This avoids hard-cutting long lines and keeps text responsive.
-        // We intentionally disable wrapping in Select/Visual so word indices map 1:1.
-        let wrap_text = matches!(view, AppView::Reader | AppView::Search | AppView::Rsvp);
+        // Render each paragraph as wrapped visual lines to avoid hard-cutting long lines.
+        // Select/Visual now also wrap, with selection/cursor highlights preserved by word index.
+        let wrap_text = matches!(
+            view,
+            AppView::Reader | AppView::Search | AppView::Rsvp | AppView::Select | AppView::Visual
+        );
 
         let annotation_bg = |kind: &str| match AnnotationKind::from_str(kind) {
             AnnotationKind::Highlight => Color::Rgb(80, 60, 40),
@@ -275,6 +277,42 @@ pub fn render(f: &mut Frame, app: &mut App) {
                                 if is_in_anno {
                                     style = style.bg(annotation_bg(&anno.kind));
                                     break;
+                                }
+                            }
+
+                            // Active selection highlight (Select/Visual)
+                            let is_selected = if matches!(view, AppView::Select | AppView::Visual) {
+                                if let Some((sl, sw, el, ew)) = selection {
+                                    if logical_i > sl && logical_i < el {
+                                        true
+                                    } else if logical_i == sl && logical_i == el {
+                                        wi >= sw && wi <= ew
+                                    } else if logical_i == sl {
+                                        wi >= sw
+                                    } else if logical_i == el {
+                                        wi <= ew
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                            if is_selected {
+                                style = style.bg(Color::Rgb(60, 60, 120)).fg(Color::White);
+                            }
+
+                            // Cursor highlight (Select/Visual)
+                            if (view == AppView::Select || view == AppView::Visual)
+                                && logical_i == book.current_line
+                                && wi == book.word_index
+                            {
+                                style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                                if view == AppView::Visual {
+                                    style = style.add_modifier(Modifier::UNDERLINED);
                                 }
                             }
 

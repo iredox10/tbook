@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod db;
+mod deps;
 mod parser;
 mod ui;
 
